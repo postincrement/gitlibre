@@ -33,22 +33,26 @@ interface CommitGraphProps {
   workspaceId: WorkspaceId;
   commits: CommitInfo[];
   branches: BranchInfo[];
+  selectedCommitId: string | null;
   loading: boolean;
   loadingMore: boolean;
   hasMore: boolean;
   error: string | null;
   onLoadMore: () => void;
+  onSelectCommit: (commit: CommitInfo) => void;
 }
 
 export function CommitGraph({
   workspaceId,
   commits,
   branches,
+  selectedCommitId,
   loading,
   loadingMore,
   hasMore,
   error,
   onLoadMore,
+  onSelectCommit,
 }: CommitGraphProps) {
   const layout = useMemo(() => layoutCommitGraph(commits), [commits]);
   const [widths, setWidths] = useState<CommitGraphColumnWidths>(() =>
@@ -210,8 +214,8 @@ export function CommitGraph({
   const bodyHeight = Math.max(rowsHeight, Math.max(0, viewportH - HEADER_H));
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain">
         <div style={{ minWidth: totalWidth }}>
           <div
             className="sticky top-0 z-10 border-b border-border bg-surface-raised/95 text-[11px] font-medium uppercase tracking-wide text-ink-muted backdrop-blur"
@@ -316,12 +320,26 @@ export function CommitGraph({
 
             {layout.rows.map((row) => {
               const uncommitted = isUncommittedCommit(row.commit);
+              const selected = row.commit.id === selectedCommitId;
               return (
               <div
                 key={row.commit.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelectCommit(row.commit)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectCommit(row.commit);
+                  }
+                }}
                 className={[
-                  "grid items-center border-b border-border/40 text-[12px] hover:bg-surface-overlay/60",
-                  uncommitted ? "bg-warning/5" : "",
+                  "grid cursor-pointer items-center border-b border-border/40 text-[12px]",
+                  selected
+                    ? "bg-accent/20"
+                    : uncommitted
+                      ? "bg-warning/5 hover:bg-surface-overlay/60"
+                      : "hover:bg-surface-overlay/60",
                 ].join(" ")}
                 style={{ gridTemplateColumns: gridTemplate, height: ROW_H }}
                 title={

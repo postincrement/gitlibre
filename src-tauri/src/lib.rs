@@ -61,6 +61,8 @@ pub fn run() {
             commands::list_repository_branches,
             commands::list_remote_branches,
             commands::list_repository_commits,
+            commands::list_commit_files,
+            commands::get_commit_file_diff,
             commands::list_workspace_statuses,
             commands::fetch_repository,
             commands::fetch_workspace,

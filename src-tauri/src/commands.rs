@@ -566,6 +566,62 @@ pub async fn list_repository_commits(
 }
 
 #[tauri::command]
+pub async fn list_commit_files(
+    id: RepositoryId,
+    commit: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<gitlibre_core::CommitFileChange>> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    gitlibre_core::list_commit_files(
+        state.coordinator.executor(),
+        &path,
+        commit.trim(),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn get_commit_file_diff(
+    id: RepositoryId,
+    commit: String,
+    path: String,
+    old_path: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let repo_path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    if !repo_path.exists() {
+        return Ok(String::new());
+    }
+    gitlibre_core::get_commit_file_diff_with_old_path(
+        state.coordinator.executor(),
+        &repo_path,
+        commit.trim(),
+        path.trim(),
+        old_path.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
 pub async fn get_repository_status(
     id: RepositoryId,
     state: State<'_, AppState>,

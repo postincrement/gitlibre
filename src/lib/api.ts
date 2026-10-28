@@ -11,6 +11,7 @@ import type {
   RepoStatus,
   UpdateAccountRequest,
   BranchInfo,
+  CommitFileChange,
   CommitInfo,
   Workspace,
   WorkspaceFetchFinishedEvent,
@@ -128,6 +129,27 @@ export async function listRepositoryCommits(
     id,
     limit: options?.limit ?? null,
     skip: options?.skip ?? null,
+  });
+}
+
+export async function listCommitFiles(
+  id: RepositoryId,
+  commit: string,
+): Promise<CommitFileChange[]> {
+  return invoke<CommitFileChange[]>("list_commit_files", { id, commit });
+}
+
+export async function getCommitFileDiff(
+  id: RepositoryId,
+  commit: string,
+  path: string,
+  oldPath?: string | null,
+): Promise<string> {
+  return invoke<string>("get_commit_file_diff", {
+    id,
+    commit,
+    path,
+    oldPath: oldPath ?? null,
   });
 }
 

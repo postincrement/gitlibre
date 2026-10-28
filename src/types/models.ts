@@ -141,6 +141,12 @@ export interface CommitInfo {
   refs: string[];
 }
 
+export interface CommitFileChange {
+  status: string;
+  path: string;
+  oldPath: string | null;
+}
+
 export interface FetchProgressEvent {
   repositoryId: RepositoryId;
   message: string;
