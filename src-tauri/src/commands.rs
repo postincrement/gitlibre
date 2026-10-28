@@ -5,7 +5,8 @@ use crate::dto::{
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
-    detect_repo_account, inspect_repository, Account, AccountId, AuthKind, CoreError, GitAuth,
+    detect_repo_account, detect_repo_account_from_remote, inspect_repository, Account, AccountId,
+    AuthKind, CoreError, GitAuth,
     RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
@@ -118,14 +119,23 @@ pub fn set_active_workspace(
 }
 
 #[tauri::command]
+pub fn open_workspace_window(intent: String, app: AppHandle) -> CmdResult<()> {
+    crate::menu::open_workspace_window(&app, &intent).map_err(|err| AppErrorDto {
+        code: "internal".into(),
+        message: format!("Failed to open workspace window: {err}"),
+    })
+}
+
+#[tauri::command]
 pub async fn add_repository(
+    workspace_id: WorkspaceId,
     path: String,
     state: State<'_, AppState>,
 ) -> CmdResult<AddRepositoryResult> {
     let repo = {
         let mut store = lock_store(&state)?;
         store
-            .add_repository_to_active(PathBuf::from(&path))
+            .add_repository_to_workspace(workspace_id, PathBuf::from(&path))
             .map_err(AppErrorDto::from)?
     };
 
@@ -167,6 +177,7 @@ pub async fn add_repository(
 #[tauri::command]
 pub async fn detect_repository_account(
     id: RepositoryId,
+    remote_name: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<DetectedAccountDto> {
     let (path, accounts) = {
@@ -178,9 +189,14 @@ pub async fn detect_repository_account(
         (repo.path, store.list_accounts().to_vec())
     };
 
-    let mut detected = detect_repo_account(state.coordinator.executor(), &path, &accounts)
-        .await
-        .map_err(AppErrorDto::from)?;
+    let detected = detect_repo_account_from_remote(
+        state.coordinator.executor(),
+        &path,
+        &accounts,
+        remote_name.as_deref(),
+    )
+    .await
+    .map_err(AppErrorDto::from)?;
 
     // If a match exists and the repo is unassigned, assign it.
     if let Some(account_id) = detected.matched_account_id {
@@ -188,9 +204,6 @@ pub async fn detect_repository_account(
         if store.get_repository(id).and_then(|r| r.account_id).is_none() {
             let _ = store.set_repository_account(id, Some(account_id));
         }
-    } else {
-        // Recompute match after any concurrent account changes — already done above.
-        let _ = &mut detected;
     }
 
     Ok(detected.into())
@@ -198,12 +211,13 @@ pub async fn detect_repository_account(
 
 #[tauri::command]
 pub fn remove_repository(
+    workspace_id: WorkspaceId,
     id: RepositoryId,
     state: State<'_, AppState>,
 ) -> CmdResult<AppSnapshot> {
     let mut store = lock_store(&state)?;
     store
-        .remove_repository_from_active(id)
+        .remove_repository_from_workspace(workspace_id, id)
         .map_err(AppErrorDto::from)?;
     drop(store);
     snapshot_from_state(&state)
@@ -494,12 +508,13 @@ pub async fn get_repository_status(
 
 #[tauri::command]
 pub async fn list_workspace_statuses(
+    workspace_id: WorkspaceId,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<RepoStatusDto>> {
     let repos: Vec<_> = {
         let store = lock_store(&state)?;
         store
-            .repositories_in_active_workspace()
+            .repositories_in_workspace(workspace_id)
             .into_iter()
             .cloned()
             .collect()
@@ -651,13 +666,14 @@ pub async fn fetch_repository(
 
 #[tauri::command]
 pub async fn fetch_workspace(
+    workspace_id: WorkspaceId,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<WorkspaceFetchFinishedEvent> {
     let repos: Vec<(RepositoryId, PathBuf)> = {
         let store = lock_store(&state)?;
         store
-            .repositories_in_active_workspace()
+            .repositories_in_workspace(workspace_id)
             .into_iter()
             .map(|r| (r.id, r.path.clone()))
             .collect()

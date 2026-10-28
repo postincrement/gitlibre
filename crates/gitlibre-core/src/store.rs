@@ -111,14 +111,21 @@ impl ConfigStore {
         self.config.repositories.iter().find(|r| r.id == id)
     }
 
-    pub fn repositories_in_active_workspace(&self) -> Vec<&Repository> {
-        let Some(ws) = self.active_workspace() else {
+    pub fn repositories_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<&Repository> {
+        let Some(ws) = self.config.workspaces.iter().find(|w| w.id == workspace_id) else {
             return Vec::new();
         };
         ws.repositories
             .iter()
             .filter_map(|id| self.get_repository(*id))
             .collect()
+    }
+
+    pub fn repositories_in_active_workspace(&self) -> Vec<&Repository> {
+        let Some(id) = self.config.active_workspace_id else {
+            return Vec::new();
+        };
+        self.repositories_in_workspace(id)
     }
 
     /// Canonicalize `path`, validate it is a Git repo, and add it to the active workspace.

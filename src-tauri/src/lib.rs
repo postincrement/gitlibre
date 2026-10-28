@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod menu;
 mod state;
 
 use gitlibre_core::{ConfigStore, GitExecutor};
@@ -30,13 +31,21 @@ pub fn run() {
             };
 
             app.manage(AppState::new(store, executor));
+
+            let app_menu = menu::build_menu(app.handle())?;
+            app.set_menu(app_menu)?;
+
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            menu::handle_menu_event(&app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::create_workspace,
             commands::delete_workspace,
             commands::set_active_workspace,
+            commands::open_workspace_window,
             commands::add_repository,
             commands::remove_repository,
             commands::detect_repository_account,

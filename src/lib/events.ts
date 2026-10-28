@@ -24,3 +24,15 @@ export async function onWorkspaceFetchFinished(
     handler(e.payload),
   );
 }
+
+export async function onMenuOpenWorkspace(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-open-workspace", () => handler());
+}
+
+export async function onMenuNewWorkspace(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-new-workspace", () => handler());
+}
+
+export async function onMenuAccounts(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-accounts", () => handler());
+}

@@ -31,18 +31,32 @@ export async function setActiveWorkspace(id: WorkspaceId): Promise<AppSnapshot> 
   return invoke<AppSnapshot>("set_active_workspace", { id });
 }
 
-export async function addRepository(path: string): Promise<AddRepositoryResult> {
-  return invoke<AddRepositoryResult>("add_repository", { path });
+export async function openWorkspaceWindow(intent: "open" | "create"): Promise<void> {
+  return invoke<void>("open_workspace_window", { intent });
+}
+
+export async function addRepository(
+  workspaceId: WorkspaceId,
+  path: string,
+): Promise<AddRepositoryResult> {
+  return invoke<AddRepositoryResult>("add_repository", { workspaceId, path });
 }
 
 export async function detectRepositoryAccount(
   id: RepositoryId,
+  remoteName?: string | null,
 ): Promise<DetectedAccount> {
-  return invoke<DetectedAccount>("detect_repository_account", { id });
+  return invoke<DetectedAccount>("detect_repository_account", {
+    id,
+    remoteName: remoteName ?? null,
+  });
 }
 
-export async function removeRepository(id: RepositoryId): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>("remove_repository", { id });
+export async function removeRepository(
+  workspaceId: WorkspaceId,
+  id: RepositoryId,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>("remove_repository", { workspaceId, id });
 }
 
 export async function createAccount(request: CreateAccountRequest): Promise<Account> {
@@ -87,14 +101,18 @@ export async function getRepositoryStatus(id: RepositoryId): Promise<RepoStatus>
   return invoke<RepoStatus>("get_repository_status", { id });
 }
 
-export async function listWorkspaceStatuses(): Promise<RepoStatus[]> {
-  return invoke<RepoStatus[]>("list_workspace_statuses");
+export async function listWorkspaceStatuses(
+  workspaceId: WorkspaceId,
+): Promise<RepoStatus[]> {
+  return invoke<RepoStatus[]>("list_workspace_statuses", { workspaceId });
 }
 
 export async function fetchRepository(id: RepositoryId): Promise<void> {
   return invoke<void>("fetch_repository", { id });
 }
 
-export async function fetchWorkspace(): Promise<WorkspaceFetchFinishedEvent> {
-  return invoke<WorkspaceFetchFinishedEvent>("fetch_workspace");
+export async function fetchWorkspace(
+  workspaceId: WorkspaceId,
+): Promise<WorkspaceFetchFinishedEvent> {
+  return invoke<WorkspaceFetchFinishedEvent>("fetch_workspace", { workspaceId });
 }

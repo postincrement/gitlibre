@@ -49,18 +49,43 @@ pub struct ParsedRemoteUrl {
 }
 
 /// Inspect remotes + local Git identity and optionally match known accounts.
+///
+/// When `remote_name` is set, that remote is used instead of the usual
+/// `origin`-or-first primary selection.
 pub async fn detect_repo_account(
     executor: &GitExecutor,
     repo_path: &Path,
     known_accounts: &[Account],
+) -> CoreResult<DetectedRepoAccount> {
+    detect_repo_account_from_remote(executor, repo_path, known_accounts, None).await
+}
+
+/// Like [`detect_repo_account`], but prefer a named remote when provided.
+pub async fn detect_repo_account_from_remote(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    known_accounts: &[Account],
+    remote_name: Option<&str>,
 ) -> CoreResult<DetectedRepoAccount> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
     }
 
     let remotes = list_remotes(executor, repo_path).await?;
-    let primary = pick_primary_remote(&remotes);
-    let parsed = primary
+    let chosen = match remote_name {
+        Some(name) => {
+            let remote = remotes.iter().find(|r| r.name == name).ok_or_else(|| {
+                CoreError::new(
+                    crate::error::ErrorCode::Internal,
+                    format!("Remote was not found: {name}"),
+                )
+            })?;
+            Some(remote.clone())
+        }
+        None => pick_primary_remote(&remotes).cloned(),
+    };
+    let parsed = chosen
+        .as_ref()
         .map(|r| parse_remote_url(&r.fetch_url))
         .unwrap_or(None);
 
@@ -120,8 +145,8 @@ pub async fn detect_repo_account(
         ssh_host_alias,
         suggested_ssh_key_path,
         remote_owner: owner,
-        primary_remote_name: primary.map(|r| r.name.clone()),
-        primary_remote_url: primary.map(|r| r.fetch_url.clone()),
+        primary_remote_name: chosen.as_ref().map(|r| r.name.clone()),
+        primary_remote_url: chosen.as_ref().map(|r| r.fetch_url.clone()),
         commit_name: commit_identity.name,
         commit_email: commit_identity.email,
         commit_identity_is_local: commit_identity.is_local,

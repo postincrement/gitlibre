@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TopNav } from "./components/TopNav";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { RepoDetail } from "./components/RepoDetail";
-import { ConfirmModal, PromptModal } from "./components/Modal";
+import { ConfirmModal } from "./components/Modal";
 import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
+import { RepoAccountDialog } from "./components/RepoAccountDialog";
+import { WorkspaceOpenModal } from "./components/WorkspaceOpenModal";
 import * as api from "./lib/api";
 import {
+  onMenuAccounts,
+  onMenuNewWorkspace,
+  onMenuOpenWorkspace,
   onRepoFetchFinished,
   onRepoFetchProgress,
   onWorkspaceFetchFinished,
@@ -23,24 +29,56 @@ function emptySnapshot(): AppSnapshot {
   return { workspaces: [], activeWorkspaceId: null, repositories: [], accounts: [] };
 }
 
+function readStartupIntent(): "open" | "create" {
+  const fromQuery = new URLSearchParams(window.location.search).get("intent");
+  if (fromQuery === "create") return "create";
+  if (fromQuery === "open") return "open";
+  try {
+    const label = getCurrentWindow().label;
+    if (label.includes("-create-")) return "create";
+  } catch {
+    // Browser preview has no Tauri window.
+  }
+  return "open";
+}
+
 export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
+  /** Workspace bound to this window (one workspace per window). */
+  const [windowWorkspaceId, setWindowWorkspaceId] = useState<WorkspaceId | null>(null);
   const [statuses, setStatuses] = useState<RepoStatus[]>([]);
   const [selectedId, setSelectedId] = useState<RepositoryId | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
-  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashMode, setSplashMode] = useState<"home" | "create">(
+    readStartupIntent() === "create" ? "create" : "home",
+  );
+  const [splashKey, setSplashKey] = useState(0);
+  const [pendingRemoveId, setPendingRemoveId] = useState<RepositoryId | null>(null);
+  /** Global accounts manager (menu bar). */
   const [showAccounts, setShowAccounts] = useState(false);
+  /** Repository whose per-repo account dialog is open (context menu). */
+  const [accountsRepoId, setAccountsRepoId] = useState<RepositoryId | null>(null);
   const [detection, setDetection] = useState<DetectedAccount | null>(null);
   const [detectionRepoId, setDetectionRepoId] = useState<RepositoryId | null>(null);
   const [showCreateFromDetection, setShowCreateFromDetection] = useState(false);
   const detectedForRepos = useRef(new Set<RepositoryId>());
+  const windowWorkspaceIdRef = useRef<WorkspaceId | null>(null);
 
-  const refreshStatuses = useCallback(async () => {
+  useEffect(() => {
+    windowWorkspaceIdRef.current = windowWorkspaceId;
+  }, [windowWorkspaceId]);
+
+  const windowWorkspace = useMemo(
+    () => snapshot.workspaces.find((w) => w.id === windowWorkspaceId) ?? null,
+    [snapshot.workspaces, windowWorkspaceId],
+  );
+
+  const refreshStatuses = useCallback(async (workspaceId: WorkspaceId) => {
     try {
-      const list = await api.listWorkspaceStatuses();
+      const list = await api.listWorkspaceStatuses(workspaceId);
       setStatuses(list);
       setSelectedId((prev) => {
         if (prev && list.some((s) => s.repositoryId === prev)) return prev;
@@ -51,30 +89,44 @@ export default function App() {
     }
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    try {
-      const snap = await api.getSnapshot();
-      setSnapshot(snap);
-      setLoadState("ready");
-      if (snap.activeWorkspaceId) {
-        await refreshStatuses();
-      } else {
-        setStatuses([]);
-        setSelectedId(null);
+  const refreshSnapshot = useCallback(async () => {
+    const snap = await api.getSnapshot();
+    setSnapshot(snap);
+    return snap;
+  }, []);
+
+  const bindWorkspace = useCallback(
+    async (id: WorkspaceId) => {
+      await api.setActiveWorkspace(id);
+      const snap = await refreshSnapshot();
+      setWindowWorkspaceId(id);
+      setShowSplash(false);
+      const name = snap.workspaces.find((w) => w.id === id)?.name;
+      try {
+        await getCurrentWindow().setTitle(name ? `GitLibre — ${name}` : "GitLibre");
+      } catch {
+        // Title updates are best-effort (e.g. browser-only preview).
       }
-    } catch (e) {
-      setLoadState("error");
-      setError(formatError(e));
-    }
-  }, [refreshStatuses]);
+      await refreshStatuses(id);
+    },
+    [refreshSnapshot, refreshStatuses],
+  );
 
   useEffect(() => {
-    void refreshAll();
-  }, [refreshAll]);
+    void (async () => {
+      try {
+        await refreshSnapshot();
+        setLoadState("ready");
+      } catch (e) {
+        setLoadState("error");
+        setError(formatError(e));
+      }
+    })();
+  }, [refreshSnapshot]);
 
   // When opening a repo with no assigned account, extract hints from remotes/config.
   useEffect(() => {
-    if (!selectedId || loadState !== "ready") return;
+    if (!selectedId || loadState !== "ready" || !windowWorkspaceId) return;
     const repo = snapshot.repositories.find((r) => r.id === selectedId);
     if (!repo || repo.accountId) return;
     if (detectedForRepos.current.has(selectedId)) return;
@@ -86,7 +138,7 @@ export default function App() {
         const detected = await api.detectRepositoryAccount(selectedId);
         if (cancelled) return;
         if (detected.matchedAccountId) {
-          await refreshAll();
+          await refreshSnapshot();
           setDetection(null);
           setDetectionRepoId(null);
           return;
@@ -108,7 +160,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, loadState, snapshot.repositories, refreshAll]);
+  }, [selectedId, loadState, snapshot.repositories, windowWorkspaceId, refreshSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +194,6 @@ export default function App() {
                 : s,
             ),
           );
-          // Refresh Git status for the finished repo without assuming selection.
           void api.getRepositoryStatus(event.repositoryId).then((fresh) => {
             if (cancelled) return;
             setStatuses((prev) =>
@@ -155,7 +206,38 @@ export default function App() {
         await onWorkspaceFetchFinished(() => {
           if (cancelled) return;
           setBusy(false);
-          void refreshStatuses();
+          const id = windowWorkspaceIdRef.current;
+          if (id) void refreshStatuses(id);
+        }),
+      );
+      unlisteners.push(
+        await onMenuOpenWorkspace(() => {
+          if (cancelled) return;
+          if (windowWorkspaceIdRef.current) {
+            void api.openWorkspaceWindow("open");
+            return;
+          }
+          setSplashMode("home");
+          setSplashKey((k) => k + 1);
+          setShowSplash(true);
+        }),
+      );
+      unlisteners.push(
+        await onMenuNewWorkspace(() => {
+          if (cancelled) return;
+          if (windowWorkspaceIdRef.current) {
+            void api.openWorkspaceWindow("create");
+            return;
+          }
+          setSplashMode("create");
+          setSplashKey((k) => k + 1);
+          setShowSplash(true);
+        }),
+      );
+      unlisteners.push(
+        await onMenuAccounts(() => {
+          if (cancelled) return;
+          setShowAccounts(true);
         }),
       );
     }
@@ -173,34 +255,35 @@ export default function App() {
   );
 
   async function handleCreateWorkspace(name: string) {
+    setError(null);
     try {
-      setError(null);
-      setShowCreateWorkspace(false);
-      await api.createWorkspace(name);
-      await refreshAll();
+      const workspace = await api.createWorkspace(name);
+      await bindWorkspace(workspace.id);
     } catch (e) {
       setError(formatError(e));
+      throw e;
     }
   }
 
-  async function handleSelectWorkspace(id: WorkspaceId) {
+  async function handleOpenWorkspace(id: WorkspaceId) {
     try {
       setError(null);
-      const snap = await api.setActiveWorkspace(id);
-      setSnapshot(snap);
-      await refreshStatuses();
+      await bindWorkspace(id);
     } catch (e) {
       setError(formatError(e));
+      throw e;
     }
   }
 
   async function handleAddRepository() {
+    if (!windowWorkspaceId) return;
     try {
       setError(null);
       const path = await api.pickDirectory();
       if (!path) return;
-      const result = await api.addRepository(path);
-      await refreshAll();
+      const result = await api.addRepository(windowWorkspaceId, path);
+      await refreshSnapshot();
+      await refreshStatuses(windowWorkspaceId);
       setSelectedId(result.repository.id);
       if (result.detection && !result.autoAssignedAccountId) {
         setDetection(result.detection);
@@ -215,37 +298,43 @@ export default function App() {
     }
   }
 
-  async function handleDetectAccount() {
-    if (!selectedId) return;
+  async function handlePopulateFromRemote(
+    repoId: RepositoryId,
+    remoteName: string,
+  ) {
+    setError(null);
+    setBusy(true);
     try {
-      setError(null);
-      setBusy(true);
-      detectedForRepos.current.delete(selectedId);
-      const detected = await api.detectRepositoryAccount(selectedId);
-      detectedForRepos.current.add(selectedId);
-      await refreshAll();
+      detectedForRepos.current.delete(repoId);
+      const detected = await api.detectRepositoryAccount(repoId, remoteName);
+      detectedForRepos.current.add(repoId);
+      await refreshSnapshot();
+      if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
       if (detected.matchedAccountId) {
         setDetection(null);
         setDetectionRepoId(null);
-      } else {
-        setDetection(detected);
-        setDetectionRepoId(selectedId);
+        return;
       }
+      setDetection(detected);
+      setDetectionRepoId(repoId);
+      setShowCreateFromDetection(true);
     } catch (e) {
       setError(formatError(e));
+      throw e;
     } finally {
       setBusy(false);
     }
   }
 
   async function handleRemoveRepository() {
-    if (!selectedId) return;
+    if (!pendingRemoveId || !windowWorkspaceId) return;
     try {
       setError(null);
-      setShowRemoveConfirm(false);
-      const snap = await api.removeRepository(selectedId);
+      const id = pendingRemoveId;
+      setPendingRemoveId(null);
+      const snap = await api.removeRepository(windowWorkspaceId, id);
       setSnapshot(snap);
-      await refreshStatuses();
+      await refreshStatuses(windowWorkspaceId);
     } catch (e) {
       setError(formatError(e));
     }
@@ -265,26 +354,55 @@ export default function App() {
   }
 
   async function handleFetchAll() {
+    if (!windowWorkspaceId) return;
     try {
       setError(null);
       setBusy(true);
-      await api.fetchWorkspace();
+      await api.fetchWorkspace(windowWorkspaceId);
     } catch (e) {
       setError(formatError(e));
       setBusy(false);
     }
   }
 
-  async function handleAssignAccount(accountId: AccountId | null) {
-    if (!selectedId) return;
+  async function handleAssignAccount(
+    repoId: RepositoryId,
+    accountId: AccountId | null,
+  ) {
     try {
       setError(null);
-      await api.setRepositoryAccount(selectedId, accountId);
-      await refreshAll();
+      await api.setRepositoryAccount(repoId, accountId);
+      await refreshSnapshot();
+      if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+      if (accountId) {
+        setDetection(null);
+        setDetectionRepoId(null);
+      }
     } catch (e) {
       setError(formatError(e));
     }
   }
+
+  const accountsRepoContext = useMemo(() => {
+    if (!accountsRepoId) return null;
+    const fromStatus = statuses.find((s) => s.repositoryId === accountsRepoId);
+    if (fromStatus) {
+      return {
+        id: fromStatus.repositoryId,
+        displayName: fromStatus.displayName,
+        accountId: fromStatus.accountId,
+      };
+    }
+    const fromRegistry = snapshot.repositories.find((r) => r.id === accountsRepoId);
+    if (fromRegistry) {
+      return {
+        id: fromRegistry.id,
+        displayName: fromRegistry.displayName,
+        accountId: fromRegistry.accountId,
+      };
+    }
+    return null;
+  }, [accountsRepoId, statuses, snapshot.repositories]);
 
   if (loadState === "loading") {
     return (
@@ -294,16 +412,38 @@ export default function App() {
     );
   }
 
+  const accountsDialog = showAccounts ? (
+    <AccountsPanel
+      accounts={snapshot.accounts}
+      onClose={() => setShowAccounts(false)}
+      onChanged={async () => {
+        await refreshSnapshot();
+        if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+      }}
+    />
+  ) : null;
+
+  if (showSplash || !windowWorkspaceId) {
+    return (
+      <>
+        <WorkspaceOpenModal
+          key={splashKey}
+          workspaces={snapshot.workspaces}
+          initialSelectedId={snapshot.activeWorkspaceId}
+          initialMode={splashMode}
+          onOpen={handleOpenWorkspace}
+          onCreate={handleCreateWorkspace}
+        />
+        {accountsDialog}
+      </>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <TopNav
-        workspaces={snapshot.workspaces}
-        activeWorkspaceId={snapshot.activeWorkspaceId}
+        workspaceName={windowWorkspace?.name ?? null}
         busy={busy}
-        onSelectWorkspace={handleSelectWorkspace}
-        onAddWorkspace={() => setShowCreateWorkspace(true)}
-        onAddRepository={handleAddRepository}
-        onManageAccounts={() => setShowAccounts(true)}
         onFetchAll={handleFetchAll}
       />
       {error && (
@@ -315,33 +455,37 @@ export default function App() {
         <RepoSidebar
           statuses={statuses}
           selectedId={selectedId}
+          busy={busy}
           onSelect={setSelectedId}
+          onAddRepository={handleAddRepository}
+          onManageAccounts={(id) => setAccountsRepoId(id)}
+          onRemoveRepository={(id) => setPendingRemoveId(id)}
         />
-        <RepoDetail
-          status={selected}
+        <RepoDetail status={selected} onFetch={handleFetchOne} busy={busy} />
+      </div>
+      {accountsRepoContext && (
+        <RepoAccountDialog
+          repository={accountsRepoContext}
           accounts={snapshot.accounts}
-          detection={
-            selected && detectionRepoId === selected.repositoryId ? detection : null
+          remotes={
+            statuses.find((s) => s.repositoryId === accountsRepoContext.id)
+              ?.remotes ?? []
           }
-          onFetch={handleFetchOne}
-          onRemove={() => setShowRemoveConfirm(true)}
-          onAssignAccount={handleAssignAccount}
-          onDetectAccount={handleDetectAccount}
-          onCreateFromDetection={() => setShowCreateFromDetection(true)}
-          onDismissDetection={() => {
+          busy={busy}
+          onAssignAccount={(accountId) =>
+            handleAssignAccount(accountsRepoContext.id, accountId)
+          }
+          onPopulateFromRemote={(remoteName) =>
+            handlePopulateFromRemote(accountsRepoContext.id, remoteName)
+          }
+          onClose={() => {
+            setAccountsRepoId(null);
             setDetection(null);
             setDetectionRepoId(null);
           }}
-          busy={busy}
-        />
-      </div>
-      {showAccounts && (
-        <AccountsPanel
-          accounts={snapshot.accounts}
-          onClose={() => setShowAccounts(false)}
-          onChanged={refreshAll}
         />
       )}
+      {accountsDialog}
       {showCreateFromDetection && detection && (
         <AddAccountForm
           draft={detection}
@@ -349,33 +493,24 @@ export default function App() {
           onCancel={() => setShowCreateFromDetection(false)}
           onCreated={async (account) => {
             setShowCreateFromDetection(false);
-            const repoId = detectionRepoId ?? selectedId;
+            const repoId = detectionRepoId ?? accountsRepoId;
             if (repoId) {
               await api.setRepositoryAccount(repoId, account.id);
             }
             setDetection(null);
             setDetectionRepoId(null);
-            await refreshAll();
+            await refreshSnapshot();
+            if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
           }}
         />
       )}
-      {showCreateWorkspace && (
-        <PromptModal
-          title="New workspace"
-          label="Workspace name"
-          initialValue="ScryPOS"
-          confirmLabel="Create"
-          onCancel={() => setShowCreateWorkspace(false)}
-          onSubmit={handleCreateWorkspace}
-        />
-      )}
-      {showRemoveConfirm && (
+      {pendingRemoveId && (
         <ConfirmModal
           title="Remove repository"
           message="Remove this repository from the workspace? Files on disk will not be deleted."
           confirmLabel="Remove"
           danger
-          onCancel={() => setShowRemoveConfirm(false)}
+          onCancel={() => setPendingRemoveId(null)}
           onConfirm={handleRemoveRepository}
         />
       )}

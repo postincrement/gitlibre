@@ -4,26 +4,29 @@ import { useEffect, useRef } from "react";
 interface ModalProps {
   title: string;
   children: ReactNode;
-  onClose: () => void;
+  onClose?: () => void;
+  /** When false, Escape and backdrop click do not close the dialog. Default true. */
+  dismissible?: boolean;
 }
 
-export function Modal({ title, children, onClose }: ModalProps) {
+export function Modal({ title, children, onClose, dismissible = true }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!dismissible || !onClose) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onClose?.();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, dismissible]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       role="presentation"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (dismissible && onClose && e.target === e.currentTarget) onClose();
       }}
     >
       <div

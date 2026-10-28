@@ -14,7 +14,10 @@ pub mod ssh_config;
 pub mod store;
 
 pub use auth::GitAuth;
-pub use detect::{detect_repo_account, parse_remote_url, DetectedRepoAccount, ParsedRemoteUrl};
+pub use detect::{
+    detect_repo_account, detect_repo_account_from_remote, parse_remote_url, DetectedRepoAccount,
+    ParsedRemoteUrl,
+};
 pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
 pub use git::{
