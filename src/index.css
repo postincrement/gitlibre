@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #12151a;
+  --color-surface-raised: #1a1f27;
+  --color-surface-overlay: #222833;
+  --color-border: #3a4556;
+  --color-ink: #e8edf5;
+  --color-ink-muted: #9aa6b8;
+  --color-accent: #3d8bfd;
+  --color-accent-hover: #5a9dff;
+  --color-success: #3ecf8e;
+  --color-warning: #e6b84d;
+  --color-danger: #f07178;
+  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+html {
+  /* Force dark native form chrome (select, scrollbars, focus rings) in WKWebView. */
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: radial-gradient(1200px 600px at 10% -10%, #1b2433 0%, var(--color-surface) 55%);
+  color: var(--color-ink);
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color-scheme: dark;
+}
+
+select,
+input[type="text"],
+input:not([type]) {
+  appearance: none;
+  background-color: var(--color-surface-overlay);
+  color: var(--color-ink);
+  border: 1px solid var(--color-border);
+}
+
+select {
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-ink-muted) 50%),
+    linear-gradient(135deg, var(--color-ink-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% - 2px),
+    calc(100% - 9px) calc(50% - 2px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 1.75rem;
+}
+
+select option {
+  background-color: var(--color-surface-raised);
+  color: var(--color-ink);
+}
+
+.btn-primary {
+  border-radius: 0.375rem;
+  background: var(--color-accent);
+  color: #fff;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  transition: background 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn-secondary {
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-overlay);
+  color: var(--color-ink);
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  transition: border-color 0.15s ease;
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-ink-muted);
+}
+
+.btn-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn-danger {
+  border-radius: 0.375rem;
+  background: var(--color-danger);
+  color: #1a1010;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
