@@ -3,7 +3,7 @@ use crate::git::executor::GitExecutor;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const DEFAULT_LIMIT: u32 = 300;
+pub const DEFAULT_COMMIT_PAGE_SIZE: u32 = 100;
 const FIELD_SEP: char = '\u{1f}';
 const RECORD_SEP: char = '\u{1e}';
 
@@ -17,22 +17,27 @@ pub struct CommitInfo {
     pub subject: String,
     pub author_name: String,
     pub authored_at: String,
-    /// Decoration such as `main`, `origin/main`, `tag: v1.0`, `HEAD`.
+    /// Decorations such as `main`, `origin/main`, `tag: v1.0`, `HEAD`.
     pub refs: Vec<String>,
 }
 
 /// List commits reachable from all refs, newest first, for graph rendering.
+///
+/// `skip` offsets into the topo-ordered history (for infinite scroll).
 pub async fn list_commits(
     executor: &GitExecutor,
     repo_path: &Path,
     limit: Option<u32>,
+    skip: Option<u32>,
 ) -> CoreResult<Vec<CommitInfo>> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
     }
 
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 2000);
+    let limit = limit.unwrap_or(DEFAULT_COMMIT_PAGE_SIZE).clamp(1, 2000);
+    let skip = skip.unwrap_or(0);
     let limit_arg = format!("-{limit}");
+    let skip_arg = format!("--skip={skip}");
     // Record / field separators keep subjects and decorations parse-safe.
     // %D = decorations without wrapping parentheses.
     let pretty = format!(
@@ -46,6 +51,7 @@ pub async fn list_commits(
                 "log",
                 "--all",
                 "--topo-order",
+                &skip_arg,
                 &limit_arg,
                 &format!("--pretty=format:{pretty}"),
             ],
@@ -195,7 +201,10 @@ mod tests {
         git(&repo, &["checkout", "main"]);
 
         let executor = GitExecutor::from_path().unwrap();
-        let commits = list_commits(&executor, &repo, Some(50)).await.unwrap();
+        let commits = list_commits(&executor, &repo, Some(50), None).await.unwrap();
+        let page = list_commits(&executor, &repo, Some(2), Some(1)).await.unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].id, commits[1].id);
         assert!(commits.len() >= 3);
         assert!(commits.iter().any(|c| c.subject == "second on main"));
         assert!(commits.iter().any(|c| c.subject == "work on feature"));

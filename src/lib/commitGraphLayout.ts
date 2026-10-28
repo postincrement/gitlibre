@@ -1,4 +1,44 @@
-import type { CommitInfo } from "../types/models";
+import type { CommitInfo, WorkingTreeStatus } from "../types/models";
+
+/** Synthetic id for the dirty working-tree pseudo-commit row. */
+export const UNCOMMITTED_COMMIT_ID = "__gitlibre_uncommitted__";
+
+export function isUncommittedCommit(commit: CommitInfo): boolean {
+  return commit.id === UNCOMMITTED_COMMIT_ID;
+}
+
+export function workingTreeIsDirty(wt: WorkingTreeStatus | null | undefined): boolean {
+  if (!wt) return false;
+  return (
+    wt.modified + wt.added + wt.deleted + wt.untracked + wt.renamed + wt.conflicted > 0
+  );
+}
+
+/**
+ * When the working tree is dirty, prepend a pseudo-commit on the current
+ * branch lane, parented to the HEAD tip (or alone if history is empty).
+ */
+export function withUncommittedPseudoCommit(
+  commits: CommitInfo[],
+  dirty: boolean,
+): CommitInfo[] {
+  if (!dirty) return commits;
+  if (commits.some(isUncommittedCommit)) return commits;
+
+  const head = commits.find((commit) => commit.refs.includes("HEAD"));
+  const parentId = head?.id ?? commits[0]?.id ?? null;
+
+  const pseudo: CommitInfo = {
+    id: UNCOMMITTED_COMMIT_ID,
+    shortId: "•••••••",
+    parents: parentId ? [parentId] : [],
+    subject: "Uncommitted changes",
+    authorName: "",
+    authoredAt: "",
+    refs: [],
+  };
+  return [pseudo, ...commits];
+}
 
 export interface GraphRow {
   commit: CommitInfo;
@@ -22,52 +62,102 @@ export interface GraphLayout {
 }
 
 /**
- * Assign lanes (columns) for a newest-first commit list and build parent edges.
- * The current branch (commit decorated with HEAD) is kept in lane 0.
+ * Assign lanes for a newest-first commit list.
+ *
+ * - Each first-parent chain keeps one column for its whole lifetime (no mid-graph jumping).
+ * - HEAD's first-parent history always uses lane 0.
+ * - New chains reuse the lowest lane whose rows are still free, so finished
+ *   branches do not push later ones endlessly to the right.
  */
 export function layoutCommitGraph(commits: CommitInfo[]): GraphLayout {
-  const headId = commits.find((c) => c.refs.includes("HEAD"))?.id ?? null;
+  const byId = new Map(commits.map((commit) => [commit.id, commit]));
+  const rowOf = new Map(commits.map((commit, index) => [commit.id, index]));
+  const laneOf = new Map<string, number>();
+  /** Row indices already occupied by a commit node in each lane. */
+  const laneRows: Array<Set<number>> = [];
 
-  // Reserve lane 0 for HEAD so other tips open to the right.
-  const active: (string | null)[] = headId ? [headId] : [];
-  const rows: GraphRow[] = [];
-  let laneCount = 1;
-
-  for (const commit of commits) {
-    let lane = active.indexOf(commit.id);
-    if (lane === -1) {
-      // Never place a new tip in lane 0 while HEAD still owns it.
-      lane = findFreeLane(active, headId);
-      if (lane === active.length) {
-        active.push(commit.id);
-      } else {
-        active[lane] = commit.id;
-      }
+  const collectUnassignedChain = (startId: string): string[] => {
+    const ids: string[] = [];
+    let id: string | undefined = startId;
+    while (id && byId.has(id) && !laneOf.has(id)) {
+      ids.push(id);
+      id = byId.get(id)!.parents[0];
     }
+    return ids;
+  };
 
-    rows.push({ commit, lane });
-    laneCount = Math.max(laneCount, active.length, lane + 1);
+  /** Inclusive row span covered by a chain's nodes and vertical first-parent edges. */
+  const spannedRowsFor = (chainIds: string[]): number[] => {
+    if (chainIds.length === 0) return [];
+    const rows = chainIds.map((id) => rowOf.get(id)!);
+    const min = Math.min(...rows);
+    const max = Math.max(...rows);
+    const spanned: number[] = [];
+    for (let row = min; row <= max; row++) spanned.push(row);
+    return spanned;
+  };
 
-    active[lane] = null;
+  const laneFreeForRows = (lane: number, rows: number[]): boolean => {
+    const occupied = laneRows[lane];
+    if (!occupied) return true;
+    return rows.every((row) => !occupied.has(row));
+  };
 
-    commit.parents.forEach((parent, parentIndex) => {
-      if (active.includes(parent)) return;
-      if (parentIndex === 0) {
-        active[lane] = parent;
-        return;
-      }
-      const spot = findFreeLane(active, headId);
-      if (spot === active.length) {
-        active.push(parent);
-      } else {
-        active[spot] = parent;
-      }
-    });
+  const paintChain = (chainIds: string[], lane: number) => {
+    while (laneRows.length <= lane) {
+      laneRows.push(new Set());
+    }
+    for (const id of chainIds) {
+      laneOf.set(id, lane);
+    }
+    for (const row of spannedRowsFor(chainIds)) {
+      laneRows[lane].add(row);
+    }
+  };
 
-    laneCount = Math.max(laneCount, active.length);
+  /**
+   * Lowest lane whose corridor does not collide with `rows`.
+   * Lane 0 is reserved for HEAD when present.
+   */
+  const allocateLane = (rows: number[], reservedLane0: boolean): number => {
+    const start = reservedLane0 ? 1 : 0;
+    for (let lane = start; lane < laneRows.length; lane++) {
+      if (laneFreeForRows(lane, rows)) return lane;
+    }
+    return Math.max(laneRows.length, start);
+  };
+
+  // Pin the dirty working-tree node on lane 0 so it sits on the current branch.
+  if (commits[0] && isUncommittedCommit(commits[0])) {
+    paintChain([commits[0].id], 0);
   }
 
-  remapLaneToLeft(rows, headId);
+  const head = commits.find(
+    (commit) => !isUncommittedCommit(commit) && commit.refs.includes("HEAD"),
+  );
+  if (head) {
+    paintChain(collectUnassignedChain(head.id), 0);
+  }
+
+  const reservedLane0 = Boolean(head) || (commits[0] && isUncommittedCommit(commits[0]));
+
+  for (const commit of commits) {
+    if (laneOf.has(commit.id)) continue;
+    const chain = collectUnassignedChain(commit.id);
+    if (chain.length === 0) continue;
+    const lane = allocateLane(spannedRowsFor(chain), reservedLane0);
+    paintChain(chain, lane);
+  }
+
+  const rows: GraphRow[] = commits.map((commit) => ({
+    commit,
+    lane: laneOf.get(commit.id) ?? 0,
+  }));
+
+  let laneCount = 1;
+  for (const row of rows) {
+    laneCount = Math.max(laneCount, row.lane + 1);
+  }
 
   const idToRow = new Map(rows.map((row, index) => [row.commit.id, index]));
   const edges: GraphEdge[] = [];
@@ -96,34 +186,7 @@ export function layoutCommitGraph(commits: CommitInfo[]): GraphLayout {
     }
   }
 
-  for (const row of rows) {
-    laneCount = Math.max(laneCount, row.lane + 1);
-  }
-
   return { rows, edges, laneCount };
-}
-
-/** Prefer empty slots to the right of lane 0 when HEAD still occupies / reserved it. */
-function findFreeLane(active: (string | null)[], headId: string | null): number {
-  for (let i = 0; i < active.length; i++) {
-    if (active[i] !== null) continue;
-    // Keep lane 0 free only for the HEAD chain while HEAD tip is still pending.
-    if (i === 0 && headId && active.includes(headId)) continue;
-    return i;
-  }
-  return active.length;
-}
-
-/** Ensure the HEAD commit's lane is 0 by swapping if needed. */
-function remapLaneToLeft(rows: GraphRow[], headId: string | null) {
-  if (!headId) return;
-  const headRow = rows.find((r) => r.commit.id === headId);
-  if (!headRow || headRow.lane === 0) return;
-  const from = headRow.lane;
-  for (const row of rows) {
-    if (row.lane === from) row.lane = 0;
-    else if (row.lane === 0) row.lane = from;
-  }
 }
 
 const LANE_COLORS = [

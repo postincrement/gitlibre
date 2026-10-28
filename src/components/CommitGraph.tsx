@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { CommitInfo, WorkspaceId } from "../types/models";
+import type { BranchInfo, CommitInfo, WorkspaceId } from "../types/models";
 import {
   COMMIT_GRAPH_COLUMNS,
   clampColumnWidth,
@@ -17,6 +17,7 @@ import {
 } from "../lib/commitGraphColumns";
 import {
   formatCommitTime,
+  isUncommittedCommit,
   laneColor,
   layoutCommitGraph,
 } from "../lib/commitGraphLayout";
@@ -31,27 +32,63 @@ const HEADER_H = 28;
 interface CommitGraphProps {
   workspaceId: WorkspaceId;
   commits: CommitInfo[];
+  branches: BranchInfo[];
   loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
   error: string | null;
+  onLoadMore: () => void;
 }
 
 export function CommitGraph({
   workspaceId,
   commits,
+  branches,
   loading,
+  loadingMore,
+  hasMore,
   error,
+  onLoadMore,
 }: CommitGraphProps) {
   const layout = useMemo(() => layoutCommitGraph(commits), [commits]);
   const [widths, setWidths] = useState<CommitGraphColumnWidths>(() =>
     loadCommitGraphColumnWidths(workspaceId),
   );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [viewportH, setViewportH] = useState(0);
 
   useEffect(() => {
     setWidths(loadCommitGraphColumnWidths(workspaceId));
   }, [workspaceId]);
 
-  // Lane count must not change column widths — those are workspace preferences.
-  // Wide graphs clip (or scroll) inside the graph column instead.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setViewportH(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loading, commits.length === 0]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMore();
+        }
+      },
+      { root, rootMargin: "120px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore, commits.length]);
+
   const graphInkWidth = GRAPH_PAD_X * 2 + layout.laneCount * LANE_W;
 
   const gridTemplate = useMemo(
@@ -98,21 +135,83 @@ export function CommitGraph({
     [workspaceId],
   );
 
+  /** Ribbons cover each connected run of a lane — tip through last node, not past it into empty page. */
+  const behindByBranch = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const branch of branches) {
+      if (branch.behind != null && branch.behind > 0) {
+        map.set(branch.name, branch.behind);
+      }
+    }
+    return map;
+  }, [branches]);
+
+  const laneRibbons = useMemo(() => {
+    const segments: { lane: number; startRow: number; endRow: number }[] = [];
+
+    for (let lane = 0; lane < layout.laneCount; lane++) {
+      const nodeRows = layout.rows
+        .map((row, index) => (row.lane === lane ? index : -1))
+        .filter((index) => index >= 0);
+      if (nodeRows.length === 0) continue;
+
+      const parent = new Map<number, number>();
+      for (const row of nodeRows) parent.set(row, row);
+      const find = (row: number): number => {
+        let cur = row;
+        while (parent.get(cur) !== cur) cur = parent.get(cur)!;
+        return cur;
+      };
+      const union = (a: number, b: number) => {
+        const ra = find(a);
+        const rb = find(b);
+        if (ra !== rb) parent.set(ra, rb);
+      };
+
+      for (const edge of layout.edges) {
+        if (edge.stub) continue;
+        if (edge.fromLane !== lane || edge.toLane !== lane) continue;
+        if (parent.has(edge.fromRow) && parent.has(edge.toRow)) {
+          union(edge.fromRow, edge.toRow);
+        }
+      }
+
+      const groups = new Map<number, number[]>();
+      for (const row of nodeRows) {
+        const root = find(row);
+        const list = groups.get(root);
+        if (list) list.push(row);
+        else groups.set(root, [row]);
+      }
+
+      for (const rows of groups.values()) {
+        segments.push({
+          lane,
+          startRow: Math.min(...rows),
+          endRow: Math.max(...rows),
+        });
+      }
+    }
+
+    return segments;
+  }, [layout]);
+
   if (loading) {
     return <p className="p-4 text-sm text-ink-muted">Loading history…</p>;
   }
-  if (error) {
+  if (error && commits.length === 0) {
     return <p className="p-4 text-sm text-danger">{error}</p>;
   }
   if (commits.length === 0) {
     return <p className="p-4 text-sm text-ink-muted">No commits yet.</p>;
   }
 
-  const bodyHeight = layout.rows.length * ROW_H;
+  const rowsHeight = layout.rows.length * ROW_H;
+  const bodyHeight = Math.max(rowsHeight, Math.max(0, viewportH - HEADER_H));
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <div style={{ minWidth: totalWidth }}>
           <div
             className="sticky top-0 z-10 border-b border-border bg-surface-raised/95 text-[11px] font-medium uppercase tracking-wide text-ink-muted backdrop-blur"
@@ -127,7 +226,6 @@ export function CommitGraph({
                   <span className="truncate">{col.title}</span>
                 </div>
               ))}
-              {/* Handles sit above every header cell so neighboring columns cannot steal hits. */}
               {resizeHandles.map((handle) => (
                 <ColumnResizeHandle
                   key={`resize-${handle.columnId}`}
@@ -147,6 +245,24 @@ export function CommitGraph({
               aria-hidden
             >
               <svg width={Math.max(graphInkWidth, widths.graph)} height={bodyHeight}>
+                {laneRibbons.map((segment) => {
+                  const x = GRAPH_PAD_X + segment.lane * LANE_W + LANE_W / 2;
+                  const y0 = GRAPH_PAD_Y + segment.startRow * ROW_H;
+                  const y1 = GRAPH_PAD_Y + segment.endRow * ROW_H;
+                  if (y1 <= y0) return null;
+                  return (
+                    <line
+                      key={`ribbon-${segment.lane}-${segment.startRow}-${segment.endRow}`}
+                      x1={x}
+                      y1={y0}
+                      x2={x}
+                      y2={y1}
+                      stroke={laneColor(segment.lane)}
+                      strokeWidth={1.5}
+                      opacity={0.45}
+                    />
+                  );
+                })}
                 {layout.edges.map((edge, i) => {
                   const x1 = GRAPH_PAD_X + edge.fromLane * LANE_W + LANE_W / 2;
                   const y1 = GRAPH_PAD_Y + edge.fromRow * ROW_H;
@@ -159,11 +275,13 @@ export function CommitGraph({
                       ? edge.fromLane
                       : Math.min(edge.fromLane, edge.toLane),
                   );
-                  const midY = (y1 + y2) / 2;
+                  const yGap = Math.min(y1 + ROW_H / 2, y2);
                   const d =
                     x1 === x2
                       ? `M ${x1} ${y1} L ${x2} ${y2}`
-                      : `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                      : yGap <= y1
+                        ? `M ${x1} ${y1} L ${x2} ${y2}`
+                        : `M ${x1} ${y1} L ${x2} ${yGap} L ${x2} ${y2}`;
                   return (
                     <path
                       key={`${edge.fromRow}-${edge.toRow}-${edge.fromLane}-${edge.toLane}-${i}`}
@@ -178,48 +296,85 @@ export function CommitGraph({
                 {layout.rows.map((row, index) => {
                   const cx = GRAPH_PAD_X + row.lane * LANE_W + LANE_W / 2;
                   const cy = GRAPH_PAD_Y + index * ROW_H;
-                  const color = laneColor(row.lane);
+                  const uncommitted = isUncommittedCommit(row.commit);
+                  const color = uncommitted ? "var(--color-warning)" : laneColor(row.lane);
                   const isHead = row.commit.refs.includes("HEAD");
                   return (
                     <circle
                       key={row.commit.id}
                       cx={cx}
                       cy={cy}
-                      r={isHead ? DOT_R + 1 : DOT_R}
-                      fill={color}
-                      stroke={isHead ? "var(--color-ink)" : "var(--color-surface)"}
-                      strokeWidth={isHead ? 2 : 1}
+                      r={isHead || uncommitted ? DOT_R + 1 : DOT_R}
+                      fill={uncommitted ? "var(--color-surface)" : color}
+                      stroke={color}
+                      strokeWidth={uncommitted || isHead ? 2 : 1}
                     />
                   );
                 })}
               </svg>
             </div>
 
-            {layout.rows.map((row) => (
+            {layout.rows.map((row) => {
+              const uncommitted = isUncommittedCommit(row.commit);
+              return (
               <div
                 key={row.commit.id}
-                className="grid items-center border-b border-border/40 text-[12px] hover:bg-surface-overlay/60"
+                className={[
+                  "grid items-center border-b border-border/40 text-[12px] hover:bg-surface-overlay/60",
+                  uncommitted ? "bg-warning/5" : "",
+                ].join(" ")}
                 style={{ gridTemplateColumns: gridTemplate, height: ROW_H }}
-                title={`${row.commit.id}\n${row.commit.subject}`}
+                title={
+                  uncommitted
+                    ? row.commit.subject
+                    : `${row.commit.id}\n${row.commit.subject}`
+                }
               >
                 <div aria-hidden />
                 <div className="flex min-w-0 items-center gap-1.5 overflow-hidden px-2">
-                  <RefChips refs={row.commit.refs} />
-                  <span className="min-w-0 truncate text-ink">{row.commit.subject}</span>
+                  <RefChips refs={row.commit.refs} behindByBranch={behindByBranch} />
+                  <span
+                    className={[
+                      "min-w-0 truncate",
+                      uncommitted ? "font-medium text-warning" : "text-ink",
+                    ].join(" ")}
+                  >
+                    {row.commit.subject}
+                  </span>
                 </div>
                 <div
                   className="truncate px-2 font-mono tabular-nums"
-                  style={{ color: laneColor(row.lane) }}
+                  style={{
+                    color: uncommitted ? "var(--color-warning)" : laneColor(row.lane),
+                  }}
                 >
-                  {row.commit.shortId}
+                  {uncommitted ? "—" : row.commit.shortId}
                 </div>
-                <div className="truncate px-2 text-ink-muted">{row.commit.authorName}</div>
+                <div className="truncate px-2 text-ink-muted">
+                  {uncommitted ? "" : row.commit.authorName}
+                </div>
                 <div className="truncate px-2 tabular-nums text-ink-muted">
-                  {formatCommitTime(row.commit.authoredAt)}
+                  {uncommitted ? "" : formatCommitTime(row.commit.authoredAt)}
                 </div>
               </div>
-            ))}
+              );
+            })}
+
+            <div
+              ref={sentinelRef}
+              className="absolute right-0 bottom-0 left-0 h-1"
+              aria-hidden
+            />
           </div>
+
+          {(loadingMore || hasMore) && (
+            <div className="px-3 py-2 text-[11px] text-ink-muted">
+              {loadingMore ? "Loading more commits…" : "Scroll for more history"}
+            </div>
+          )}
+          {error && commits.length > 0 && (
+            <div className="px-3 py-2 text-[11px] text-danger">{error}</div>
+          )}
         </div>
       </div>
     </div>
@@ -233,7 +388,6 @@ function ColumnResizeHandle({
   onResize,
 }: {
   columnId: CommitGraphColumnId;
-  /** Right edge of the column, in px from the header origin. */
   left: number;
   width: number;
   onResize: (id: CommitGraphColumnId, width: number) => void;
@@ -299,7 +453,13 @@ function ColumnResizeHandle({
   );
 }
 
-function RefChips({ refs }: { refs: string[] }) {
+function RefChips({
+  refs,
+  behindByBranch,
+}: {
+  refs: string[];
+  behindByBranch: Map<string, number>;
+}) {
   if (refs.length === 0) return null;
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -307,11 +467,13 @@ function RefChips({ refs }: { refs: string[] }) {
         const isHead = ref === "HEAD";
         const isTag = ref.startsWith("tag:");
         const isRemote = ref.includes("/");
+        const behind =
+          !isHead && !isTag ? behindByBranch.get(ref) : undefined;
         return (
           <span
             key={ref}
             className={[
-              "rounded px-1 py-px font-medium leading-tight",
+              "inline-flex items-center gap-1 rounded px-1 py-px font-medium leading-tight",
               isHead
                 ? "bg-accent/25 text-accent"
                 : isTag
@@ -321,7 +483,12 @@ function RefChips({ refs }: { refs: string[] }) {
                     : "bg-success/20 text-success",
             ].join(" ")}
           >
-            {ref}
+            <span>{ref}</span>
+            {behind != null && (
+              <span className="font-normal text-warning">
+                {behind} behind
+              </span>
+            )}
           </span>
         );
       })}

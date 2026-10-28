@@ -1,51 +1,99 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { CommitInfo, RepoStatus, WorkspaceId } from "../types/models";
+import type {
+  BranchInfo,
+  CommitInfo,
+  RepoStatus,
+  WorkspaceId,
+} from "../types/models";
 import * as api from "../lib/api";
+import {
+  withUncommittedPseudoCommit,
+  workingTreeIsDirty,
+} from "../lib/commitGraphLayout";
 import { CommitGraph } from "./CommitGraph";
+
+const COMMIT_PAGE_SIZE = 100;
 
 interface RepoDetailProps {
   workspaceId: WorkspaceId;
   status: RepoStatus | null;
+  branches: BranchInfo[];
 }
 
-export function RepoDetail({ workspaceId, status }: RepoDetailProps) {
+export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadingMoreRef = useRef(false);
+
+  const loadInitial = useCallback(async (repositoryId: RepoStatus["repositoryId"]) => {
+    setLoading(true);
+    setError(null);
+    setHasMore(false);
+    try {
+      const page = await api.listRepositoryCommits(repositoryId, {
+        limit: COMMIT_PAGE_SIZE + 1,
+        skip: 0,
+      });
+      const more = page.length > COMMIT_PAGE_SIZE;
+      setCommits(more ? page.slice(0, COMMIT_PAGE_SIZE) : page);
+      setHasMore(more);
+    } catch (e) {
+      setCommits([]);
+      setHasMore(false);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadMore = useCallback(async () => {
+    if (!status?.available || !hasMore || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const page = await api.listRepositoryCommits(status.repositoryId, {
+        limit: COMMIT_PAGE_SIZE + 1,
+        skip: commits.length,
+      });
+      const more = page.length > COMMIT_PAGE_SIZE;
+      const slice = more ? page.slice(0, COMMIT_PAGE_SIZE) : page;
+      setCommits((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        const appended = slice.filter((c) => !seen.has(c.id));
+        return appended.length === 0 ? prev : [...prev, ...appended];
+      });
+      setHasMore(more);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setHasMore(false);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [status?.available, status?.repositoryId, hasMore, commits.length]);
 
   useEffect(() => {
     if (!status?.available) {
       setCommits([]);
       setError(null);
       setLoading(false);
+      setLoadingMore(false);
+      setHasMore(false);
       return;
     }
 
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+    void loadInitial(status.repositoryId);
+  }, [status?.repositoryId, status?.available, status?.lastFetchSummary, loadInitial]);
 
-    void (async () => {
-      try {
-        const list = await api.listRepositoryCommits(status.repositoryId);
-        if (!cancelled) {
-          setCommits(list);
-          setLoading(false);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setCommits([]);
-          setError(e instanceof Error ? e.message : String(e));
-          setLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [status?.repositoryId, status?.available, status?.lastFetchSummary]);
+  const dirty = workingTreeIsDirty(status?.workingTree);
+  const graphCommits = useMemo(
+    () => withUncommittedPseudoCommit(commits, dirty),
+    [commits, dirty],
+  );
 
   if (!status) {
     return (
@@ -54,11 +102,6 @@ export function RepoDetail({ workspaceId, status }: RepoDetailProps) {
       </main>
     );
   }
-
-  const wt = status.workingTree;
-  const dirty =
-    wt &&
-    wt.modified + wt.added + wt.deleted + wt.untracked + wt.renamed + wt.conflicted > 0;
 
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -94,9 +137,13 @@ export function RepoDetail({ workspaceId, status }: RepoDetailProps) {
       {status.available ? (
         <CommitGraph
           workspaceId={workspaceId}
-          commits={commits}
+          commits={graphCommits}
+          branches={branches}
           loading={loading}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
           error={error}
+          onLoadMore={loadMore}
         />
       ) : (
         <p className="p-4 text-sm text-ink-muted">Commit history unavailable.</p>

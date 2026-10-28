@@ -546,6 +546,7 @@ pub async fn list_remote_branches(
 pub async fn list_repository_commits(
     id: RepositoryId,
     limit: Option<u32>,
+    skip: Option<u32>,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<gitlibre_core::CommitInfo>> {
     let path = {
@@ -559,7 +560,7 @@ pub async fn list_repository_commits(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    gitlibre_core::list_commits(state.coordinator.executor(), &path, limit)
+    gitlibre_core::list_commits(state.coordinator.executor(), &path, limit, skip)
         .await
         .map_err(AppErrorDto::from)
 }

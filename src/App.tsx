@@ -525,7 +525,11 @@ export default function App() {
           onRemoveRepository={(id) => setPendingRemoveId(id)}
         />
         <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} />
-        <RepoDetail workspaceId={windowWorkspaceId} status={selected} />
+        <RepoDetail
+          workspaceId={windowWorkspaceId}
+          status={selected}
+          branches={branches}
+        />
       </div>
       {accountsRepoContext && (
         <RepoAccountDialog

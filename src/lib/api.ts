@@ -122,9 +122,13 @@ export async function listRemoteBranches(
 
 export async function listRepositoryCommits(
   id: RepositoryId,
-  limit?: number,
+  options?: { limit?: number; skip?: number },
 ): Promise<CommitInfo[]> {
-  return invoke<CommitInfo[]>("list_repository_commits", { id, limit: limit ?? null });
+  return invoke<CommitInfo[]>("list_repository_commits", {
+    id,
+    limit: options?.limit ?? null,
+    skip: options?.skip ?? null,
+  });
 }
 
 export async function listWorkspaceStatuses(
