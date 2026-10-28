@@ -1,6 +1,6 @@
 use gitlibre_core::{
-    Account, AccountId, AuthKind, CoreError, HostingProvider, RemoteInfo, Repository,
-    RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
+    Account, AccountId, AuthKind, CoreError, DetectedRepoAccount, HostingProvider, RemoteInfo,
+    Repository, RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -106,6 +106,46 @@ pub struct CreateAccountRequest {
     pub ssh_private_key_path: Option<PathBuf>,
     /// HTTPS token — stored only in the OS keychain, never in config.json.
     pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedAccountDto {
+    pub provider: HostingProvider,
+    pub auth_kind: AuthKind,
+    pub suggested_username: Option<String>,
+    pub remote_host: Option<String>,
+    pub remote_owner: Option<String>,
+    pub primary_remote_name: Option<String>,
+    pub primary_remote_url: Option<String>,
+    pub commit_name: Option<String>,
+    pub commit_email: Option<String>,
+    pub matched_account_id: Option<AccountId>,
+}
+
+impl From<DetectedRepoAccount> for DetectedAccountDto {
+    fn from(d: DetectedRepoAccount) -> Self {
+        Self {
+            provider: d.provider,
+            auth_kind: d.auth_kind,
+            suggested_username: d.suggested_username,
+            remote_host: d.remote_host,
+            remote_owner: d.remote_owner,
+            primary_remote_name: d.primary_remote_name,
+            primary_remote_url: d.primary_remote_url,
+            commit_name: d.commit_name,
+            commit_email: d.commit_email,
+            matched_account_id: d.matched_account_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRepositoryResult {
+    pub repository: RepositoryDto,
+    pub detection: Option<DetectedAccountDto>,
+    pub auto_assigned_account_id: Option<AccountId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

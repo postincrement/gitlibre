@@ -83,6 +83,15 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 - Unassigned repos continue to use the user’s normal system Git credentials.
 - Config schema version is `2` (v1 files migrate on open).
 
+### Account detection from existing repos
+
+[`detect.rs`](../crates/gitlibre-core/src/detect.rs) reads:
+
+- Primary remote URL (`origin`, else first) → provider, HTTPS vs SSH, host, owner/login hint
+- Local `user.name` / `user.email` → optional commit identity (not auth)
+
+On **add repository** and when **opening an unassigned repo**, GitLibre runs detection. If an existing account matches provider + username, it is auto-assigned. Otherwise the UI offers “Create account from this…” with fields pre-filled (token/key still entered by the user).
+
 ## Future seams (not implemented yet)
 
 - OAuth device flow instead of PAT paste.

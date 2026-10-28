@@ -3,6 +3,7 @@
 //! This crate is intentionally independent of Tauri so it can be unit-tested and reused.
 
 pub mod auth;
+pub mod detect;
 pub mod error;
 pub mod fetch;
 pub mod git;
@@ -12,6 +13,7 @@ pub mod secrets;
 pub mod store;
 
 pub use auth::GitAuth;
+pub use detect::{detect_repo_account, parse_remote_url, DetectedRepoAccount, ParsedRemoteUrl};
 pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
 pub use git::{

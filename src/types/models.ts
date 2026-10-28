@@ -46,6 +46,25 @@ export interface CreateAccountRequest {
   token?: string | null;
 }
 
+export interface DetectedAccount {
+  provider: HostingProvider;
+  authKind: AuthKind;
+  suggestedUsername: string | null;
+  remoteHost: string | null;
+  remoteOwner: string | null;
+  primaryRemoteName: string | null;
+  primaryRemoteUrl: string | null;
+  commitName: string | null;
+  commitEmail: string | null;
+  matchedAccountId: AccountId | null;
+}
+
+export interface AddRepositoryResult {
+  repository: Repository;
+  detection: DetectedAccount | null;
+  autoAssignedAccountId: AccountId | null;
+}
+
 export interface AppSnapshot {
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId | null;

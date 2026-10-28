@@ -1,21 +1,30 @@
 import type { ReactNode } from "react";
-import type { Account, AccountId, RepoStatus } from "../types/models";
+import type { Account, AccountId, DetectedAccount, RepoStatus } from "../types/models";
+import { DetectedAccountBanner } from "./DetectedAccountBanner";
 
 interface RepoDetailProps {
   status: RepoStatus | null;
   accounts: Account[];
+  detection: DetectedAccount | null;
   onFetch: () => void;
   onRemove: () => void;
   onAssignAccount: (accountId: AccountId | null) => void;
+  onDetectAccount: () => void;
+  onCreateFromDetection: () => void;
+  onDismissDetection: () => void;
   busy: boolean;
 }
 
 export function RepoDetail({
   status,
   accounts,
+  detection,
   onFetch,
   onRemove,
   onAssignAccount,
+  onDetectAccount,
+  onCreateFromDetection,
+  onDismissDetection,
   busy,
 }: RepoDetailProps) {
   if (!status) {
@@ -60,19 +69,38 @@ export function RepoDetail({
         <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-ink-muted">
           Authentication account
         </h2>
-        <select
-          className="field-input max-w-md"
-          value={status.accountId ?? ""}
-          onChange={(e) => onAssignAccount(e.target.value || null)}
-          disabled={busy}
-        >
-          <option value="">System Git credentials (default)</option>
-          {accounts.map((account) => (
-            <option key={account.id} value={account.id}>
-              {account.displayName} ({account.provider}/{account.username})
-            </option>
-          ))}
-        </select>
+        {!status.accountId && detection && (
+          <DetectedAccountBanner
+            detection={detection}
+            onCreateAccount={onCreateFromDetection}
+            onDismiss={onDismissDetection}
+          />
+        )}
+        <div className="flex max-w-xl flex-wrap items-center gap-2">
+          <select
+            className="field-input max-w-md flex-1"
+            value={status.accountId ?? ""}
+            onChange={(e) => onAssignAccount(e.target.value || null)}
+            disabled={busy}
+          >
+            <option value="">System Git credentials (default)</option>
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.displayName} ({account.provider}/{account.username})
+              </option>
+            ))}
+          </select>
+          {!status.accountId && (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={onDetectAccount}
+            >
+              Detect from remotes
+            </button>
+          )}
+        </div>
         <p className="mt-2 text-xs text-ink-muted">
           Per-repository identity for fetch/push. Does not change global Git config.
           Commit author identity is configured separately on the account.

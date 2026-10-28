@@ -2,8 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Account,
   AccountId,
+  AddRepositoryResult,
   AppSnapshot,
   CreateAccountRequest,
+  DetectedAccount,
   Repository,
   RepositoryId,
   RepoStatus,
@@ -28,8 +30,14 @@ export async function setActiveWorkspace(id: WorkspaceId): Promise<AppSnapshot> 
   return invoke<AppSnapshot>("set_active_workspace", { id });
 }
 
-export async function addRepository(path: string): Promise<Repository> {
-  return invoke<Repository>("add_repository", { path });
+export async function addRepository(path: string): Promise<AddRepositoryResult> {
+  return invoke<AddRepositoryResult>("add_repository", { path });
+}
+
+export async function detectRepositoryAccount(
+  id: RepositoryId,
+): Promise<DetectedAccount> {
+  return invoke<DetectedAccount>("detect_repository_account", { id });
 }
 
 export async function removeRepository(id: RepositoryId): Promise<AppSnapshot> {

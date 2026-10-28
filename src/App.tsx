@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TopNav } from "./components/TopNav";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { RepoDetail } from "./components/RepoDetail";
 import { ConfirmModal, PromptModal } from "./components/Modal";
-import { AccountsPanel } from "./components/AccountsPanel";
+import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
 import * as api from "./lib/api";
 import {
   onRepoFetchFinished,
@@ -13,6 +13,7 @@ import {
 import type {
   AccountId,
   AppSnapshot,
+  DetectedAccount,
   RepositoryId,
   RepoStatus,
   WorkspaceId,
@@ -32,6 +33,10 @@ export default function App() {
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
+  const [detection, setDetection] = useState<DetectedAccount | null>(null);
+  const [detectionRepoId, setDetectionRepoId] = useState<RepositoryId | null>(null);
+  const [showCreateFromDetection, setShowCreateFromDetection] = useState(false);
+  const detectedForRepos = useRef(new Set<RepositoryId>());
 
   const refreshStatuses = useCallback(async () => {
     try {
@@ -66,6 +71,44 @@ export default function App() {
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  // When opening a repo with no assigned account, extract hints from remotes/config.
+  useEffect(() => {
+    if (!selectedId || loadState !== "ready") return;
+    const repo = snapshot.repositories.find((r) => r.id === selectedId);
+    if (!repo || repo.accountId) return;
+    if (detectedForRepos.current.has(selectedId)) return;
+    detectedForRepos.current.add(selectedId);
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const detected = await api.detectRepositoryAccount(selectedId);
+        if (cancelled) return;
+        if (detected.matchedAccountId) {
+          await refreshAll();
+          setDetection(null);
+          setDetectionRepoId(null);
+          return;
+        }
+        if (
+          detected.primaryRemoteUrl ||
+          detected.suggestedUsername ||
+          detected.commitName ||
+          detected.commitEmail
+        ) {
+          setDetection(detected);
+          setDetectionRepoId(selectedId);
+        }
+      } catch {
+        // Detection is best-effort; ignore failures while browsing.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, loadState, snapshot.repositories, refreshAll]);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,10 +199,42 @@ export default function App() {
       setError(null);
       const path = await api.pickDirectory();
       if (!path) return;
-      await api.addRepository(path);
+      const result = await api.addRepository(path);
       await refreshAll();
+      setSelectedId(result.repository.id);
+      if (result.detection && !result.autoAssignedAccountId) {
+        setDetection(result.detection);
+        setDetectionRepoId(result.repository.id);
+        setShowCreateFromDetection(false);
+      } else {
+        setDetection(null);
+        setDetectionRepoId(null);
+      }
     } catch (e) {
       setError(formatError(e));
+    }
+  }
+
+  async function handleDetectAccount() {
+    if (!selectedId) return;
+    try {
+      setError(null);
+      setBusy(true);
+      detectedForRepos.current.delete(selectedId);
+      const detected = await api.detectRepositoryAccount(selectedId);
+      detectedForRepos.current.add(selectedId);
+      await refreshAll();
+      if (detected.matchedAccountId) {
+        setDetection(null);
+        setDetectionRepoId(null);
+      } else {
+        setDetection(detected);
+        setDetectionRepoId(selectedId);
+      }
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -245,9 +320,18 @@ export default function App() {
         <RepoDetail
           status={selected}
           accounts={snapshot.accounts}
+          detection={
+            selected && detectionRepoId === selected.repositoryId ? detection : null
+          }
           onFetch={handleFetchOne}
           onRemove={() => setShowRemoveConfirm(true)}
           onAssignAccount={handleAssignAccount}
+          onDetectAccount={handleDetectAccount}
+          onCreateFromDetection={() => setShowCreateFromDetection(true)}
+          onDismissDetection={() => {
+            setDetection(null);
+            setDetectionRepoId(null);
+          }}
           busy={busy}
         />
       </div>
@@ -256,6 +340,23 @@ export default function App() {
           accounts={snapshot.accounts}
           onClose={() => setShowAccounts(false)}
           onChanged={refreshAll}
+        />
+      )}
+      {showCreateFromDetection && detection && (
+        <AddAccountForm
+          draft={detection}
+          title="Create account from repository"
+          onCancel={() => setShowCreateFromDetection(false)}
+          onCreated={async (account) => {
+            setShowCreateFromDetection(false);
+            const repoId = detectionRepoId ?? selectedId;
+            if (repoId) {
+              await api.setRepositoryAccount(repoId, account.id);
+            }
+            setDetection(null);
+            setDetectionRepoId(null);
+            await refreshAll();
+          }}
         />
       )}
       {showCreateWorkspace && (

@@ -39,6 +39,7 @@ pub fn run() {
             commands::set_active_workspace,
             commands::add_repository,
             commands::remove_repository,
+            commands::detect_repository_account,
             commands::create_account,
             commands::delete_account,
             commands::set_repository_account,

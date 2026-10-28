@@ -1,5 +1,11 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import type { Account, AuthKind, CreateAccountRequest, HostingProvider } from "../types/models";
+import type {
+  Account,
+  AuthKind,
+  CreateAccountRequest,
+  DetectedAccount,
+  HostingProvider,
+} from "../types/models";
 import { Modal } from "./Modal";
 import * as api from "../lib/api";
 
@@ -13,7 +19,6 @@ export function AccountsPanel({ accounts, onChanged, onClose }: AccountsPanelPro
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
   const [pendingDelete, setPendingDelete] = useState<Account | null>(null);
 
   async function confirmDelete() {
@@ -129,20 +134,24 @@ export function AccountsPanel({ accounts, onChanged, onClose }: AccountsPanelPro
   );
 }
 
-function AddAccountForm({
+export function AddAccountForm({
+  draft,
+  title = "Add account",
   onCancel,
   onCreated,
 }: {
+  draft?: DetectedAccount | null;
+  title?: string;
   onCancel: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (account: Account) => Promise<void>;
 }) {
-  const [provider, setProvider] = useState<HostingProvider>("github");
-  const [authKind, setAuthKind] = useState<AuthKind>("https_token");
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [provider, setProvider] = useState<HostingProvider>(draft?.provider ?? "github");
+  const [authKind, setAuthKind] = useState<AuthKind>(draft?.authKind ?? "https_token");
+  const [username, setUsername] = useState(draft?.suggestedUsername ?? "");
+  const [displayName, setDisplayName] = useState(draft?.suggestedUsername ?? "");
   const [token, setToken] = useState("");
-  const [commitName, setCommitName] = useState("");
-  const [commitEmail, setCommitEmail] = useState("");
+  const [commitName, setCommitName] = useState(draft?.commitName ?? "");
+  const [commitEmail, setCommitEmail] = useState(draft?.commitEmail ?? "");
   const [sshPath, setSshPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -162,8 +171,8 @@ function AddAccountForm({
     try {
       setBusy(true);
       setError(null);
-      await api.createAccount(request);
-      await onCreated();
+      const account = await api.createAccount(request);
+      await onCreated(account);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -177,7 +186,12 @@ function AddAccountForm({
         onSubmit={handleSubmit}
         className="w-full max-w-md rounded-lg border border-border bg-surface-raised p-4 shadow-xl"
       >
-        <h3 className="mb-3 text-base font-semibold">Add account</h3>
+        <h3 className="mb-3 text-base font-semibold">{title}</h3>
+        {draft?.primaryRemoteUrl && (
+          <p className="mb-3 break-all font-mono text-xs text-ink-muted">
+            From remote: {draft.primaryRemoteUrl}
+          </p>
+        )}
         {error && (
           <div className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             {error}

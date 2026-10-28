@@ -1,11 +1,12 @@
 use crate::dto::{
-    AccountDto, AppErrorDto, AppSnapshot, CmdResult, CreateAccountRequest, FetchFinishedEvent,
-    FetchProgressEvent, RepoStatusDto, RepositoryDto, WorkspaceDto, WorkspaceFetchFinishedEvent,
+    AccountDto, AddRepositoryResult, AppErrorDto, AppSnapshot, CmdResult, CreateAccountRequest,
+    DetectedAccountDto, FetchFinishedEvent, FetchProgressEvent, RepoStatusDto, RepositoryDto,
+    WorkspaceDto, WorkspaceFetchFinishedEvent,
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
-    inspect_repository, Account, AccountId, AuthKind, CoreError, GitAuth, RepositoryId,
-    WorkspaceId,
+    detect_repo_account, inspect_repository, Account, AccountId, AuthKind, CoreError, GitAuth,
+    RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
@@ -117,12 +118,82 @@ pub fn set_active_workspace(
 }
 
 #[tauri::command]
-pub fn add_repository(path: String, state: State<'_, AppState>) -> CmdResult<RepositoryDto> {
-    let mut store = lock_store(&state)?;
-    let repo = store
-        .add_repository_to_active(PathBuf::from(path))
+pub async fn add_repository(
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<AddRepositoryResult> {
+    let repo = {
+        let mut store = lock_store(&state)?;
+        store
+            .add_repository_to_active(PathBuf::from(&path))
+            .map_err(AppErrorDto::from)?
+    };
+
+    let accounts = {
+        let store = lock_store(&state)?;
+        store.list_accounts().to_vec()
+    };
+
+    let detection = match detect_repo_account(state.coordinator.executor(), &repo.path, &accounts)
+        .await
+    {
+        Ok(d) => Some(d),
+        Err(err) => {
+            eprintln!("GitLibre: account detection failed for {}: {err}", repo.path.display());
+            None
+        }
+    };
+
+    let mut auto_assigned = None;
+    let mut repository = RepositoryDto::from(repo.clone());
+
+    if let Some(ref detected) = detection {
+        if let Some(account_id) = detected.matched_account_id {
+            let mut store = lock_store(&state)?;
+            if let Ok(updated) = store.set_repository_account(repo.id, Some(account_id)) {
+                repository = updated.into();
+                auto_assigned = Some(account_id);
+            }
+        }
+    }
+
+    Ok(AddRepositoryResult {
+        repository,
+        detection: detection.map(DetectedAccountDto::from),
+        auto_assigned_account_id: auto_assigned,
+    })
+}
+
+#[tauri::command]
+pub async fn detect_repository_account(
+    id: RepositoryId,
+    state: State<'_, AppState>,
+) -> CmdResult<DetectedAccountDto> {
+    let (path, accounts) = {
+        let store = lock_store(&state)?;
+        let repo = store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .clone();
+        (repo.path, store.list_accounts().to_vec())
+    };
+
+    let mut detected = detect_repo_account(state.coordinator.executor(), &path, &accounts)
+        .await
         .map_err(AppErrorDto::from)?;
-    Ok(repo.into())
+
+    // If a match exists and the repo is unassigned, assign it.
+    if let Some(account_id) = detected.matched_account_id {
+        let mut store = lock_store(&state)?;
+        if store.get_repository(id).and_then(|r| r.account_id).is_none() {
+            let _ = store.set_repository_account(id, Some(account_id));
+        }
+    } else {
+        // Recompute match after any concurrent account changes — already done above.
+        let _ = &mut detected;
+    }
+
+    Ok(detected.into())
 }
 
 #[tauri::command]
