@@ -1,5 +1,9 @@
 export type WorkspaceId = string;
 export type RepositoryId = string;
+export type AccountId = string;
+
+export type HostingProvider = "github" | "gitlab" | "bitbucket" | "generic";
+export type AuthKind = "https_token" | "ssh_key";
 
 export interface AppError {
   code: string;
@@ -16,12 +20,37 @@ export interface Repository {
   id: RepositoryId;
   path: string;
   displayName: string;
+  accountId: AccountId | null;
+}
+
+export interface Account {
+  id: AccountId;
+  provider: HostingProvider;
+  authKind: AuthKind;
+  username: string;
+  displayName: string;
+  commitName: string | null;
+  commitEmail: string | null;
+  sshPrivateKeyPath: string | null;
+  hasToken: boolean;
+}
+
+export interface CreateAccountRequest {
+  provider: HostingProvider;
+  authKind: AuthKind;
+  username: string;
+  displayName: string;
+  commitName?: string | null;
+  commitEmail?: string | null;
+  sshPrivateKeyPath?: string | null;
+  token?: string | null;
 }
 
 export interface AppSnapshot {
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId | null;
   repositories: Repository[];
+  accounts: Account[];
 }
 
 export interface RemoteInfo {
@@ -51,6 +80,7 @@ export interface RepoStatus {
   isFetching: boolean;
   lastError: string | null;
   lastFetchSummary: string | null;
+  accountId: AccountId | null;
 }
 
 export interface FetchProgressEvent {

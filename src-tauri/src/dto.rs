@@ -1,5 +1,6 @@
 use gitlibre_core::{
-    CoreError, RemoteInfo, Repository, RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
+    Account, AccountId, AuthKind, CoreError, HostingProvider, RemoteInfo, Repository,
+    RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -49,6 +50,7 @@ pub struct RepositoryDto {
     pub id: RepositoryId,
     pub path: PathBuf,
     pub display_name: String,
+    pub account_id: Option<AccountId>,
 }
 
 impl From<Repository> for RepositoryDto {
@@ -57,8 +59,53 @@ impl From<Repository> for RepositoryDto {
             id: r.id,
             path: r.path,
             display_name: r.display_name,
+            account_id: r.account_id,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDto {
+    pub id: AccountId,
+    pub provider: HostingProvider,
+    pub auth_kind: AuthKind,
+    pub username: String,
+    pub display_name: String,
+    pub commit_name: Option<String>,
+    pub commit_email: Option<String>,
+    pub ssh_private_key_path: Option<PathBuf>,
+    pub has_token: bool,
+}
+
+impl AccountDto {
+    pub fn from_account(account: Account, has_token: bool) -> Self {
+        Self {
+            id: account.id,
+            provider: account.provider,
+            auth_kind: account.auth_kind,
+            username: account.username,
+            display_name: account.display_name,
+            commit_name: account.commit_name,
+            commit_email: account.commit_email,
+            ssh_private_key_path: account.ssh_private_key_path,
+            has_token,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAccountRequest {
+    pub provider: HostingProvider,
+    pub auth_kind: AuthKind,
+    pub username: String,
+    pub display_name: String,
+    pub commit_name: Option<String>,
+    pub commit_email: Option<String>,
+    pub ssh_private_key_path: Option<PathBuf>,
+    /// HTTPS token — stored only in the OS keychain, never in config.json.
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +114,7 @@ pub struct AppSnapshot {
     pub workspaces: Vec<WorkspaceDto>,
     pub active_workspace_id: Option<WorkspaceId>,
     pub repositories: Vec<RepositoryDto>,
+    pub accounts: Vec<AccountDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +131,7 @@ pub struct RepoStatusDto {
     pub is_fetching: bool,
     pub last_error: Option<String>,
     pub last_fetch_summary: Option<String>,
+    pub account_id: Option<AccountId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

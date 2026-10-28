@@ -77,3 +77,17 @@ Paths are `PathBuf` / `OsString`, not assumed UTF-8 (important on Windows). Argu
 **Where:** config JSON + Tauri IPC DTOs in [`src-tauri/src/dto.rs`](../src-tauri/src/dto.rs)
 
 Serde maps Rust structs to JSON. Frontend DTOs use `#[serde(rename_all = "camelCase")]` so TypeScript field names stay idiomatic while Rust stays snake_case.
+
+Enum rename rules matter: `#[serde(rename_all = "snake_case")]` turns `GitHub` into `git_hub`. For provider ids we want `github`, so `HostingProvider` uses `rename_all = "lowercase"`.
+
+## Traits as capability boundaries
+
+**Where:** [`crates/gitlibre-core/src/secrets.rs`](../crates/gitlibre-core/src/secrets.rs)
+
+`SecretStore` is a trait (closest C++ analogue: abstract interface / concept). Production uses `KeyringSecretStore`; tests use `MemorySecretStore`. The Tauri layer holds `Box<dyn SecretStore>` — dynamic dispatch at the app boundary, while core APIs take `&dyn SecretStore` or concrete types in tests. Prefer static generics when hot paths need it; `Box<dyn …>` is fine for rare secret I/O.
+
+## Config migration
+
+**Where:** `migrate_config` in [`crates/gitlibre-core/src/models.rs`](../crates/gitlibre-core/src/models.rs)
+
+Persisted `version` lets us evolve the schema. Opening a v1 file fills defaults for new fields (`accounts`, `account_id`) and bumps to v2. Similar to a lightweight data migration without a database.

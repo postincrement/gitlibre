@@ -1,3 +1,4 @@
+use crate::auth::GitAuth;
 use crate::error::{CoreError, CoreResult};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,7 @@ impl GitOutput {
 ///
 /// Working directory is set per call. Environment forces non-interactive auth
 /// failure (`GIT_TERMINAL_PROMPT=0`) so the UI cannot hang on credential prompts.
+/// Optional [`GitAuth`] applies per-invocation credentials without global switching.
 #[derive(Debug, Clone)]
 pub struct GitExecutor {
     git_path: PathBuf,
@@ -52,12 +54,17 @@ impl GitExecutor {
     }
 
     /// Run `git <args>` with `cwd` as the working directory.
-    pub async fn run(
+    pub async fn run(&self, cwd: &Path, args: &[&str]) -> CoreResult<GitOutput> {
+        self.run_with_auth(cwd, args, None).await
+    }
+
+    pub async fn run_with_auth(
         &self,
         cwd: &Path,
         args: &[&str],
+        auth: Option<&GitAuth>,
     ) -> CoreResult<GitOutput> {
-        self.run_os(cwd, args.iter().map(OsString::from).collect())
+        self.run_os(cwd, args.iter().map(OsString::from).collect(), auth)
             .await
     }
 
@@ -65,15 +72,20 @@ impl GitExecutor {
         &self,
         cwd: &Path,
         args: Vec<OsString>,
+        auth: Option<&GitAuth>,
     ) -> CoreResult<GitOutput> {
         let mut cmd = Command::new(&self.git_path);
+        apply_base_env(&mut cmd);
+        if let Some(auth) = auth {
+            for (key, value) in auth.env_vars() {
+                cmd.env(key, value);
+            }
+        }
         cmd.args(&args)
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "")
             .kill_on_drop(true);
 
         let output = cmd
@@ -93,19 +105,37 @@ impl GitExecutor {
         &self,
         cwd: &Path,
         args: &[&str],
+        on_progress: F,
+    ) -> CoreResult<GitOutput>
+    where
+        F: FnMut(String) + Send,
+    {
+        self.run_with_stderr_progress_auth(cwd, args, None, on_progress)
+            .await
+    }
+
+    pub async fn run_with_stderr_progress_auth<F>(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        auth: Option<&GitAuth>,
         mut on_progress: F,
     ) -> CoreResult<GitOutput>
     where
         F: FnMut(String) + Send,
     {
         let mut cmd = Command::new(&self.git_path);
+        apply_base_env(&mut cmd);
+        if let Some(auth) = auth {
+            for (key, value) in auth.env_vars() {
+                cmd.env(key, value);
+            }
+        }
         cmd.args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "")
             .kill_on_drop(true);
 
         let mut child = cmd
@@ -122,10 +152,7 @@ impl GitExecutor {
                 let mut line = Vec::new();
                 loop {
                     line.clear();
-                    let n = reader
-                        .read_until(b'\n', &mut line)
-                        .await
-                        .unwrap_or(0);
+                    let n = reader.read_until(b'\n', &mut line).await.unwrap_or(0);
                     if n == 0 {
                         break;
                     }
@@ -190,8 +217,11 @@ impl GitExecutor {
     }
 }
 
+fn apply_base_env(cmd: &mut Command) {
+    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_ASKPASS", "");
+}
+
 fn which_git() -> CoreResult<PathBuf> {
-    // Prefer PATH lookup without pulling an extra crate for M1.
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("git");
@@ -207,7 +237,6 @@ fn which_git() -> CoreResult<PathBuf> {
             }
         }
     }
-    // Common macOS / Homebrew fallback
     for candidate in ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"] {
         let p = PathBuf::from(candidate);
         if p.is_file() {
@@ -225,6 +254,10 @@ pub fn redact_args(args: &[impl AsRef<OsStr>]) -> Vec<String> {
             let s = a.as_ref().to_string_lossy();
             if s.contains("://") && (s.contains('@') || s.contains("token")) {
                 "<redacted-url>".to_string()
+            } else if s.to_ascii_lowercase().contains("authorization")
+                || s.to_ascii_lowercase().contains("bearer")
+            {
+                "<redacted-header>".to_string()
             } else {
                 s.into_owned()
             }

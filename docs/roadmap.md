@@ -1,6 +1,6 @@
 # Roadmap
 
-## Milestone 1 — complete in this tree
+## Milestone 1 — complete
 
 - [x] Tauri 2 + React + TypeScript desktop shell
 - [x] Named workspaces with JSON persistence
@@ -9,13 +9,16 @@
 - [x] Individual and workspace-wide fetch with progress events
 - [x] Automated tests against temporary local / bare remotes
 
-## Milestone 2 — multi-account foundations
+## Milestone 2 — multi-account foundations (in progress)
 
-- [ ] Provider-independent account model (GitHub first)
-- [ ] OS keychain storage for tokens
-- [ ] Per-repository authentication identity (separate from commit `user.name` / `user.email`)
-- [ ] Non-interactive HTTPS auth without global credential switching
-- [ ] Optional SSH identity selection per repository
+- [x] Provider-independent account model (GitHub first; GitLab/Bitbucket/Generic fields ready)
+- [x] OS keychain storage for HTTPS tokens (`keyring`)
+- [x] Per-repository authentication identity assignment
+- [x] Separate optional commit name/email on the account (not used for auth)
+- [x] Per-invocation HTTPS Bearer auth / SSH `GIT_SSH_COMMAND` (no global credential switching)
+- [ ] GitHub OAuth device flow (currently PAT entry)
+- [ ] Apply commit identity to commit operations when those land
+- [ ] Validate tokens against provider APIs before save
 
 ## Milestone 3 — richer workspace operations
 

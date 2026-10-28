@@ -1,14 +1,23 @@
 import type { ReactNode } from "react";
-import type { RepoStatus } from "../types/models";
+import type { Account, AccountId, RepoStatus } from "../types/models";
 
 interface RepoDetailProps {
   status: RepoStatus | null;
+  accounts: Account[];
   onFetch: () => void;
   onRemove: () => void;
+  onAssignAccount: (accountId: AccountId | null) => void;
   busy: boolean;
 }
 
-export function RepoDetail({ status, onFetch, onRemove, busy }: RepoDetailProps) {
+export function RepoDetail({
+  status,
+  accounts,
+  onFetch,
+  onRemove,
+  onAssignAccount,
+  busy,
+}: RepoDetailProps) {
   if (!status) {
     return (
       <main className="flex flex-1 items-center justify-center p-8 text-ink-muted">
@@ -31,15 +40,11 @@ export function RepoDetail({ status, onFetch, onRemove, busy }: RepoDetailProps)
             type="button"
             onClick={onFetch}
             disabled={busy || status.isFetching || !status.available}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover disabled:opacity-40"
+            className="btn-primary"
           >
             {status.isFetching ? "Fetching…" : "Fetch"}
           </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-muted hover:border-danger hover:text-danger"
-          >
+          <button type="button" onClick={onRemove} className="btn-secondary">
             Remove from workspace
           </button>
         </div>
@@ -50,6 +55,29 @@ export function RepoDetail({ status, onFetch, onRemove, busy }: RepoDetailProps)
           {status.lastError ?? "Repository is unavailable on disk."}
         </Banner>
       )}
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-ink-muted">
+          Authentication account
+        </h2>
+        <select
+          className="field-input max-w-md"
+          value={status.accountId ?? ""}
+          onChange={(e) => onAssignAccount(e.target.value || null)}
+          disabled={busy}
+        >
+          <option value="">System Git credentials (default)</option>
+          {accounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.displayName} ({account.provider}/{account.username})
+            </option>
+          ))}
+        </select>
+        <p className="mt-2 text-xs text-ink-muted">
+          Per-repository identity for fetch/push. Does not change global Git config.
+          Commit author identity is configured separately on the account.
+        </p>
+      </section>
 
       <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
         <InfoCard label="Current branch">
@@ -117,9 +145,7 @@ export function RepoDetail({ status, onFetch, onRemove, busy }: RepoDetailProps)
         ) : (
           <p className="text-sm text-ink-muted">No fetch has been run yet.</p>
         )}
-        {status.lastError && (
-          <Banner tone="danger">{status.lastError}</Banner>
-        )}
+        {status.lastError && <Banner tone="danger">{status.lastError}</Banner>}
       </section>
     </main>
   );

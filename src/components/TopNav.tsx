@@ -8,6 +8,7 @@ interface TopNavProps {
   onSelectWorkspace: (id: WorkspaceId) => void;
   onAddWorkspace: () => void;
   onAddRepository: () => void;
+  onManageAccounts: () => void;
   onFetchAll: () => void;
 }
 
@@ -18,6 +19,7 @@ export function TopNav({
   onSelectWorkspace,
   onAddWorkspace,
   onAddRepository,
+  onManageAccounts,
   onFetchAll,
 }: TopNavProps) {
   return (
@@ -49,6 +51,7 @@ export function TopNav({
       </label>
 
       <div className="ml-auto flex items-center gap-2">
+        <NavButton onClick={onManageAccounts}>Accounts</NavButton>
         <NavButton onClick={onAddWorkspace}>Add workspace</NavButton>
         <NavButton onClick={onAddRepository} disabled={!activeWorkspaceId || busy}>
           Add repository

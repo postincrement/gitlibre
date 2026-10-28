@@ -80,6 +80,8 @@ docs/                      # Architecture, Rust learning notes, roadmap
 
 Workspace configuration is stored as versioned JSON in the platform app config directory (for example macOS `~/Library/Application Support/com.gitlibre.desktop/config.json`). Repository files on disk are never moved or modified by add/remove.
 
+Hosting account tokens are stored in the OS keychain (service `com.gitlibre.desktop`), not in the JSON file. Use **Accounts** in the app to add a GitHub (or other) PAT / SSH key, then assign an account on a repository’s detail panel.
+
 ## License
 
 MIT

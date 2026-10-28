@@ -3,6 +3,7 @@ import { TopNav } from "./components/TopNav";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { RepoDetail } from "./components/RepoDetail";
 import { ConfirmModal, PromptModal } from "./components/Modal";
+import { AccountsPanel } from "./components/AccountsPanel";
 import * as api from "./lib/api";
 import {
   onRepoFetchFinished,
@@ -10,6 +11,7 @@ import {
   onWorkspaceFetchFinished,
 } from "./lib/events";
 import type {
+  AccountId,
   AppSnapshot,
   RepositoryId,
   RepoStatus,
@@ -17,7 +19,7 @@ import type {
 } from "./types/models";
 
 function emptySnapshot(): AppSnapshot {
-  return { workspaces: [], activeWorkspaceId: null, repositories: [] };
+  return { workspaces: [], activeWorkspaceId: null, repositories: [], accounts: [] };
 }
 
 export default function App() {
@@ -29,6 +31,7 @@ export default function App() {
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [showAccounts, setShowAccounts] = useState(false);
 
   const refreshStatuses = useCallback(async () => {
     try {
@@ -197,6 +200,17 @@ export default function App() {
     }
   }
 
+  async function handleAssignAccount(accountId: AccountId | null) {
+    if (!selectedId) return;
+    try {
+      setError(null);
+      await api.setRepositoryAccount(selectedId, accountId);
+      await refreshAll();
+    } catch (e) {
+      setError(formatError(e));
+    }
+  }
+
   if (loadState === "loading") {
     return (
       <div className="flex h-full items-center justify-center text-ink-muted">
@@ -214,6 +228,7 @@ export default function App() {
         onSelectWorkspace={handleSelectWorkspace}
         onAddWorkspace={() => setShowCreateWorkspace(true)}
         onAddRepository={handleAddRepository}
+        onManageAccounts={() => setShowAccounts(true)}
         onFetchAll={handleFetchAll}
       />
       {error && (
@@ -229,11 +244,20 @@ export default function App() {
         />
         <RepoDetail
           status={selected}
+          accounts={snapshot.accounts}
           onFetch={handleFetchOne}
           onRemove={() => setShowRemoveConfirm(true)}
+          onAssignAccount={handleAssignAccount}
           busy={busy}
         />
       </div>
+      {showAccounts && (
+        <AccountsPanel
+          accounts={snapshot.accounts}
+          onClose={() => setShowAccounts(false)}
+          onChanged={refreshAll}
+        />
+      )}
       {showCreateWorkspace && (
         <PromptModal
           title="New workspace"

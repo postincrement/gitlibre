@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Account,
+  AccountId,
   AppSnapshot,
+  CreateAccountRequest,
   Repository,
   RepositoryId,
   RepoStatus,
@@ -33,8 +36,30 @@ export async function removeRepository(id: RepositoryId): Promise<AppSnapshot> {
   return invoke<AppSnapshot>("remove_repository", { id });
 }
 
+export async function createAccount(request: CreateAccountRequest): Promise<Account> {
+  return invoke<Account>("create_account", { request });
+}
+
+export async function deleteAccount(id: AccountId): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>("delete_account", { id });
+}
+
+export async function setRepositoryAccount(
+  repositoryId: RepositoryId,
+  accountId: AccountId | null,
+): Promise<Repository> {
+  return invoke<Repository>("set_repository_account", {
+    repositoryId,
+    accountId,
+  });
+}
+
 export async function pickDirectory(): Promise<string | null> {
   return invoke<string | null>("pick_directory");
+}
+
+export async function pickFile(): Promise<string | null> {
+  return invoke<string | null>("pick_file");
 }
 
 export async function getRepositoryStatus(id: RepositoryId): Promise<RepoStatus> {

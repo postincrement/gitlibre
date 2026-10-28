@@ -1,3 +1,4 @@
+use crate::auth::GitAuth;
 use crate::error::{CoreError, ErrorCode};
 use crate::git::GitExecutor;
 use crate::ids::RepositoryId;
@@ -82,6 +83,20 @@ impl FetchCoordinator {
         &self,
         repository_id: RepositoryId,
         repo_path: &Path,
+        on_progress: F,
+    ) -> FetchOutcome
+    where
+        F: FnMut(FetchProgress) + Send,
+    {
+        self.fetch_one_with_auth(repository_id, repo_path, None, on_progress)
+            .await
+    }
+
+    pub async fn fetch_one_with_auth<F>(
+        &self,
+        repository_id: RepositoryId,
+        repo_path: &Path,
+        auth: Option<GitAuth>,
         mut on_progress: F,
     ) -> FetchOutcome
     where
@@ -144,14 +159,20 @@ impl FetchCoordinator {
         }
 
         let progress_id = repository_id;
+        let auth_ref = auth.as_ref();
         let result = self
             .executor
-            .run_with_stderr_progress(repo_path, &["fetch", "--all", "--progress"], |msg| {
-                on_progress(FetchProgress {
-                    repository_id: progress_id,
-                    message: msg,
-                });
-            })
+            .run_with_stderr_progress_auth(
+                repo_path,
+                &["fetch", "--all", "--progress"],
+                auth_ref,
+                |msg| {
+                    on_progress(FetchProgress {
+                        repository_id: progress_id,
+                        message: msg,
+                    });
+                },
+            )
             .await;
 
         match result {
@@ -192,15 +213,33 @@ impl FetchCoordinator {
     where
         F: Fn(FetchProgress) + Send + Sync + Clone + 'static,
     {
+        self.fetch_many_with_auth(
+            repos
+                .into_iter()
+                .map(|(id, path)| (id, path, None))
+                .collect(),
+            on_progress,
+        )
+        .await
+    }
+
+    pub async fn fetch_many_with_auth<F>(
+        &self,
+        repos: Vec<(RepositoryId, PathBuf, Option<GitAuth>)>,
+        on_progress: F,
+    ) -> WorkspaceFetchSummary
+    where
+        F: Fn(FetchProgress) + Send + Sync + Clone + 'static,
+    {
         let total = repos.len();
         let mut handles = Vec::with_capacity(total);
 
-        for (id, path) in repos {
+        for (id, path, auth) in repos {
             let coordinator = self.clone_handles();
             let on_progress = on_progress.clone();
             handles.push(tokio::spawn(async move {
                 coordinator
-                    .fetch_one(id, &path, |p| on_progress(p))
+                    .fetch_one_with_auth(id, &path, auth, |p| on_progress(p))
                     .await
             }));
         }

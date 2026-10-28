@@ -1,4 +1,6 @@
-use gitlibre_core::{ConfigStore, FetchCoordinator, GitExecutor, RepositoryId};
+use gitlibre_core::{
+    ConfigStore, FetchCoordinator, GitExecutor, KeyringSecretStore, RepositoryId, SecretStore,
+};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -13,6 +15,7 @@ pub struct AppState {
     pub store: Mutex<ConfigStore>,
     pub coordinator: FetchCoordinator,
     pub live: Mutex<HashMap<RepositoryId, LiveRepoState>>,
+    pub secrets: Box<dyn SecretStore>,
 }
 
 impl AppState {
@@ -21,6 +24,7 @@ impl AppState {
             store: Mutex::new(store),
             coordinator: FetchCoordinator::new(executor),
             live: Mutex::new(HashMap::new()),
+            secrets: Box::new(KeyringSecretStore::new()),
         }
     }
 }

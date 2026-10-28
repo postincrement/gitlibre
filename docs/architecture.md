@@ -15,11 +15,13 @@ Framework-agnostic library:
 
 | Module | Responsibility |
 |--------|----------------|
-| `models` / `ids` | Workspace and repository types; UUID newtypes |
-| `store` | In-memory config + atomic JSON persistence |
-| `git::executor` | Spawn `git` with argv arrays, cwd, non-interactive env |
+| `models` / `ids` | Workspace, repository, account types; UUID newtypes |
+| `store` | In-memory config + atomic JSON persistence + migrations |
+| `secrets` | `SecretStore` trait; OS keychain + in-memory test store |
+| `auth` | Per-invocation `GitAuth` (HTTPS bearer / SSH key env) |
+| `git::executor` | Spawn `git` with argv arrays, cwd, optional auth env |
 | `git::status` | Porcelain v2 `-z` parsing, remotes, branch inspection |
-| `fetch` | Per-repo locks, bounded concurrency, outcome aggregation |
+| `fetch` | Per-repo locks, bounded concurrency, auth-aware fetch |
 | `error` | Typed `CoreError` + stable `ErrorCode` values |
 
 ### `gitlibre` (`src-tauri`)
@@ -70,8 +72,19 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 - Git discovery uses `PATH` plus common Homebrew/`/usr/bin` locations.
 - Auth hangs are avoided with `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS`.
 
+## Multi-account auth (M2)
+
+- Account metadata lives in `config.json` (`accounts[]`); tokens never do.
+- Tokens are stored in the OS keychain under service `com.gitlibre.desktop`, key = account UUID.
+- Each repository may reference an `account_id`.
+- On fetch, GitLibre resolves the account and applies **per-process** env:
+  - HTTPS: `GIT_CONFIG_*` `http.extraHeader=AUTHORIZATION: bearer …` and empty `credential.helper` for that invocation only.
+  - SSH: `GIT_SSH_COMMAND=ssh -i … -o IdentitiesOnly=yes -o BatchMode=yes`.
+- Unassigned repos continue to use the user’s normal system Git credentials.
+- Config schema version is `2` (v1 files migrate on open).
+
 ## Future seams (not implemented yet)
 
-- Per-repository authentication identity (commands already key by `RepositoryId` / path).
-- Provider adapters for GitHub / GitLab beyond system credentials.
+- OAuth device flow instead of PAT paste.
+- Provider REST adapters for account validation.
 - Staging, commit graph, merge tooling as additional core modules.

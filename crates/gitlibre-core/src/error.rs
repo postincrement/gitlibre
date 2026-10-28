@@ -20,6 +20,9 @@ pub enum ErrorCode {
     ConfigIo,
     ConfigParse,
     Cancelled,
+    AccountNotFound,
+    KeychainFailed,
+    InvalidAccount,
     Internal,
 }
 
@@ -66,6 +69,10 @@ impl CoreError {
 
     pub fn repository_not_found() -> Self {
         Self::new(ErrorCode::RepositoryNotFound, "Repository was not found.")
+    }
+
+    pub fn account_not_found() -> Self {
+        Self::new(ErrorCode::AccountNotFound, "Account was not found.")
     }
 
     pub fn duplicate_repository(path: impl std::fmt::Display) -> Self {

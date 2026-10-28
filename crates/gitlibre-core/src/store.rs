@@ -1,6 +1,6 @@
-use crate::error::{CoreError, CoreResult};
-use crate::ids::{RepositoryId, WorkspaceId};
-use crate::models::{AppConfig, Repository, Workspace, CONFIG_VERSION};
+use crate::error::{CoreError, CoreResult, ErrorCode};
+use crate::ids::{AccountId, RepositoryId, WorkspaceId};
+use crate::models::{migrate_config, Account, AppConfig, AuthKind, Repository, Workspace};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,13 +18,9 @@ impl ConfigStore {
         let path = path.into();
         let config = if path.exists() {
             let raw = fs::read_to_string(&path).map_err(CoreError::config_io)?;
-            let mut parsed: AppConfig =
+            let parsed: AppConfig =
                 serde_json::from_str(&raw).map_err(CoreError::config_parse)?;
-            if parsed.version == 0 {
-                parsed.version = CONFIG_VERSION;
-            }
-            // Future: migrate when parsed.version < CONFIG_VERSION
-            parsed
+            migrate_config(parsed)
         } else {
             AppConfig::default()
         };
@@ -197,6 +193,7 @@ impl ConfigStore {
                 id: RepositoryId::new(),
                 path: canonical,
                 display_name,
+                account_id: None,
             };
             let ws = self
                 .config
@@ -240,6 +237,111 @@ impl ConfigStore {
         self.save()?;
         Ok(())
     }
+
+    pub fn list_accounts(&self) -> &[Account] {
+        &self.config.accounts
+    }
+
+    pub fn get_account(&self, id: AccountId) -> Option<&Account> {
+        self.config.accounts.iter().find(|a| a.id == id)
+    }
+
+    pub fn add_account(&mut self, account: Account) -> CoreResult<Account> {
+        validate_account(&account)?;
+        if self
+            .config
+            .accounts
+            .iter()
+            .any(|a| a.provider == account.provider && a.username == account.username)
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidAccount,
+                format!(
+                    "An account for {} / {} already exists.",
+                    account.provider.as_str(),
+                    account.username
+                ),
+            ));
+        }
+        self.config.accounts.push(account.clone());
+        self.save()?;
+        Ok(account)
+    }
+
+    pub fn update_account(&mut self, account: Account) -> CoreResult<Account> {
+        validate_account(&account)?;
+        let Some(slot) = self.config.accounts.iter_mut().find(|a| a.id == account.id) else {
+            return Err(CoreError::account_not_found());
+        };
+        *slot = account.clone();
+        self.save()?;
+        Ok(account)
+    }
+
+    pub fn delete_account(&mut self, id: AccountId) -> CoreResult<()> {
+        let before = self.config.accounts.len();
+        self.config.accounts.retain(|a| a.id != id);
+        if self.config.accounts.len() == before {
+            return Err(CoreError::account_not_found());
+        }
+        for repo in &mut self.config.repositories {
+            if repo.account_id == Some(id) {
+                repo.account_id = None;
+            }
+        }
+        self.save()?;
+        Ok(())
+    }
+
+    pub fn set_repository_account(
+        &mut self,
+        repo_id: RepositoryId,
+        account_id: Option<AccountId>,
+    ) -> CoreResult<Repository> {
+        if let Some(aid) = account_id {
+            if self.get_account(aid).is_none() {
+                return Err(CoreError::account_not_found());
+            }
+        }
+        let repo = self
+            .config
+            .repositories
+            .iter_mut()
+            .find(|r| r.id == repo_id)
+            .ok_or_else(CoreError::repository_not_found)?;
+        repo.account_id = account_id;
+        let cloned = repo.clone();
+        self.save()?;
+        Ok(cloned)
+    }
+}
+
+fn validate_account(account: &Account) -> CoreResult<()> {
+    if account.username.trim().is_empty() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidAccount,
+            "Account username must not be empty.",
+        ));
+    }
+    if account.display_name.trim().is_empty() {
+        return Err(CoreError::new(
+            ErrorCode::InvalidAccount,
+            "Account display name must not be empty.",
+        ));
+    }
+    if account.auth_kind == AuthKind::SshKey
+        && account
+            .ssh_private_key_path
+            .as_ref()
+            .map(|p| p.as_os_str().is_empty())
+            .unwrap_or(true)
+    {
+        return Err(CoreError::new(
+            ErrorCode::InvalidAccount,
+            "SSH accounts require a private key path.",
+        ));
+    }
+    Ok(())
 }
 
 fn is_git_repository(path: &Path) -> bool {
@@ -254,6 +356,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::CONFIG_VERSION;
     use std::process::Command;
     use tempfile::tempdir;
 
@@ -337,5 +440,61 @@ mod tests {
         let r2 = store.add_repository_to_workspace(b.id, &repo_dir).unwrap();
         assert_eq!(r1.id, r2.id);
         assert_eq!(store.config().repositories.len(), 1);
+    }
+
+    #[test]
+    fn account_crud_and_repo_assignment() {
+        use crate::models::{AuthKind, HostingProvider};
+
+        let dir = tempdir().unwrap();
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir(&repo_dir).unwrap();
+        init_git_repo(&repo_dir);
+
+        let mut store = ConfigStore::open(dir.path().join("config.json")).unwrap();
+        store.create_workspace("ScryPOS").unwrap();
+        let repo = store.add_repository_to_active(&repo_dir).unwrap();
+
+        let account = Account {
+            id: AccountId::new(),
+            provider: HostingProvider::GitHub,
+            auth_kind: AuthKind::HttpsToken,
+            username: "alice".into(),
+            display_name: "Alice Work".into(),
+            commit_name: Some("Alice".into()),
+            commit_email: Some("alice@example.com".into()),
+            ssh_private_key_path: None,
+        };
+        let account = store.add_account(account).unwrap();
+        store
+            .set_repository_account(repo.id, Some(account.id))
+            .unwrap();
+        assert_eq!(
+            store.get_repository(repo.id).unwrap().account_id,
+            Some(account.id)
+        );
+
+        store.delete_account(account.id).unwrap();
+        assert!(store.list_accounts().is_empty());
+        assert_eq!(store.get_repository(repo.id).unwrap().account_id, None);
+    }
+
+    #[test]
+    fn migrates_v1_config_without_accounts() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(
+            &path,
+            r#"{
+              "version": 1,
+              "active_workspace_id": null,
+              "workspaces": [],
+              "repositories": []
+            }"#,
+        )
+        .unwrap();
+        let store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.config().version, CONFIG_VERSION);
+        assert!(store.list_accounts().is_empty());
     }
 }
