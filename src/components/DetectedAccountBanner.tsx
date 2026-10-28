@@ -25,6 +25,21 @@ export function DetectedAccountBanner({
           </>
         )}
       </p>
+      {detection.sshHostAlias && detection.resolvedHost && (
+        <p className="mt-1 text-xs text-ink-muted">
+          SSH alias <span className="text-ink">{detection.sshHostAlias}</span> resolves to{" "}
+          <span className="text-ink">{detection.resolvedHost}</span>
+          {detection.suggestedSshKeyPath && (
+            <>
+              {" "}
+              with key{" "}
+              <span className="break-all font-mono text-ink">
+                {detection.suggestedSshKeyPath}
+              </span>
+            </>
+          )}
+        </p>
+      )}
       {(detection.commitName || detection.commitEmail) && (
         <p className="mt-1 text-xs text-ink-muted">
           Local commit identity: {detection.commitName ?? "—"} &lt;

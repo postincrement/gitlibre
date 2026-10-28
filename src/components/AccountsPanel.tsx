@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type {
   Account,
   AuthKind,
@@ -148,13 +148,31 @@ export function AddAccountForm({
   const [provider, setProvider] = useState<HostingProvider>(draft?.provider ?? "github");
   const [authKind, setAuthKind] = useState<AuthKind>(draft?.authKind ?? "https_token");
   const [username, setUsername] = useState(draft?.suggestedUsername ?? "");
-  const [displayName, setDisplayName] = useState(draft?.suggestedUsername ?? "");
+  const [displayName, setDisplayName] = useState(
+    draft?.sshHostAlias
+      ? `${draft.suggestedUsername ?? draft.sshHostAlias} (${draft.sshHostAlias})`
+      : (draft?.suggestedUsername ?? ""),
+  );
   const [token, setToken] = useState("");
   const [commitName, setCommitName] = useState(draft?.commitName ?? "");
   const [commitEmail, setCommitEmail] = useState(draft?.commitEmail ?? "");
-  const [sshPath, setSshPath] = useState("");
+  const [sshPath, setSshPath] = useState(draft?.suggestedSshKeyPath ?? "");
+  const [sshKeys, setSshKeys] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (authKind !== "ssh_key") return;
+    void api.listSshPrivateKeys().then((keys) => {
+      setSshKeys(keys);
+      setSshPath((current) => {
+        if (current) return current;
+        if (draft?.suggestedSshKeyPath) return draft.suggestedSshKeyPath;
+        if (keys.length === 1) return keys[0];
+        return current;
+      });
+    });
+  }, [authKind, draft?.suggestedSshKeyPath]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -188,8 +206,21 @@ export function AddAccountForm({
       >
         <h3 className="mb-3 text-base font-semibold">{title}</h3>
         {draft?.primaryRemoteUrl && (
-          <p className="mb-3 break-all font-mono text-xs text-ink-muted">
+          <p className="mb-2 break-all font-mono text-xs text-ink-muted">
             From remote: {draft.primaryRemoteUrl}
+          </p>
+        )}
+        {draft?.sshHostAlias && draft.resolvedHost && (
+          <p className="mb-3 text-xs text-ink-muted">
+            SSH config: <span className="text-ink">{draft.sshHostAlias}</span> →{" "}
+            <span className="text-ink">{draft.resolvedHost}</span>
+            {draft.suggestedSshKeyPath && (
+              <>
+                {" "}
+                using{" "}
+                <span className="break-all font-mono text-ink">{draft.suggestedSshKeyPath}</span>
+              </>
+            )}
           </p>
         )}
         {error && (
@@ -256,15 +287,23 @@ export function AddAccountForm({
             <div className="flex gap-2">
               <input
                 className="field-input flex-1"
+                list="ssh-private-key-suggestions"
                 value={sshPath}
                 onChange={(e) => setSshPath(e.target.value)}
+                placeholder="~/.ssh/id_ed25519"
                 required
               />
+              <datalist id="ssh-private-key-suggestions">
+                {sshKeys.map((key) => (
+                  <option key={key} value={key} />
+                ))}
+              </datalist>
               <button
                 type="button"
                 className="btn-secondary"
+                title="Opens the file dialog in ~/.ssh"
                 onClick={() => {
-                  void api.pickFile().then((p) => {
+                  void api.pickSshKey().then((p) => {
                     if (p) setSshPath(p);
                   });
                 }}
@@ -272,6 +311,9 @@ export function AddAccountForm({
                 Browse
               </button>
             </div>
+            <p className="mt-1 text-xs text-ink-muted">
+              Pre-filled from SSH config when available. Browse opens in ~/.ssh.
+            </p>
           </Field>
         )}
 

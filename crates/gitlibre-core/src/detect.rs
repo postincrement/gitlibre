@@ -1,14 +1,16 @@
+use crate::error::{CoreError, CoreResult};
 use crate::git::{GitExecutor, RemoteInfo};
 use crate::ids::AccountId;
 use crate::models::{Account, AuthKind, HostingProvider};
-use crate::error::{CoreError, CoreResult};
+use crate::ssh_config::{resolve_alias, ResolvedSshHost};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Account-related hints extracted from an on-disk Git repository.
 ///
 /// Tokens are never discovered here — only provider, auth transport, username
-/// hints, and local commit identity from `user.name` / `user.email`.
+/// hints, SSH config rewrites, and local commit identity from `user.name` /
+/// `user.email`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedRepoAccount {
@@ -16,7 +18,14 @@ pub struct DetectedRepoAccount {
     pub auth_kind: AuthKind,
     /// Best guess at login (HTTPS URL user, else remote owner/path segment).
     pub suggested_username: Option<String>,
+    /// Host token from the remote URL (may be an SSH config alias).
     pub remote_host: Option<String>,
+    /// Hostname after `~/.ssh/config` `HostName` rewrite (same as remote_host if none).
+    pub resolved_host: Option<String>,
+    /// SSH config alias when it differs from the resolved hostname.
+    pub ssh_host_alias: Option<String>,
+    /// Preferred `IdentityFile` from SSH config, if any.
+    pub suggested_ssh_key_path: Option<PathBuf>,
     /// Owner/org segment from the remote path (`alice` in `alice/repo`).
     pub remote_owner: Option<String>,
     pub primary_remote_name: Option<String>,
@@ -56,14 +65,28 @@ pub async fn detect_repo_account(
     let commit_name = git_config_local(executor, repo_path, "user.name").await?;
     let commit_email = git_config_local(executor, repo_path, "user.email").await?;
 
+    let ssh_resolved = parsed.as_ref().and_then(|p| {
+        if p.auth_kind == AuthKind::SshKey {
+            resolve_alias(&p.host)
+        } else {
+            None
+        }
+    });
+
     let (provider, auth_kind, host, owner, url_username) = match parsed {
-        Some(p) => (
-            p.provider,
-            p.auth_kind,
-            Some(p.host),
-            p.owner,
-            p.url_username,
-        ),
+        Some(p) => {
+            let effective_host = ssh_resolved
+                .as_ref()
+                .map(|r| r.host_name.clone())
+                .unwrap_or_else(|| p.host.clone());
+            (
+                provider_from_host(&effective_host),
+                p.auth_kind,
+                Some(p.host),
+                p.owner,
+                p.url_username,
+            )
+        }
         None => (
             HostingProvider::Generic,
             AuthKind::HttpsToken,
@@ -75,14 +98,26 @@ pub async fn detect_repo_account(
 
     let suggested_username = url_username
         .clone()
+        .or_else(|| {
+            ssh_resolved
+                .as_ref()
+                .and_then(|r| r.user.clone())
+                .filter(|u| u != "git")
+        })
         .or_else(|| owner.clone())
         .filter(|s| !s.is_empty() && s != "git");
+
+    let (resolved_host, ssh_host_alias, suggested_ssh_key_path) =
+        ssh_resolution_fields(host.as_deref(), ssh_resolved.as_ref());
 
     let mut detected = DetectedRepoAccount {
         provider,
         auth_kind,
         suggested_username,
         remote_host: host,
+        resolved_host,
+        ssh_host_alias,
+        suggested_ssh_key_path,
         remote_owner: owner,
         primary_remote_name: primary.map(|r| r.name.clone()),
         primary_remote_url: primary.map(|r| r.fetch_url.clone()),
@@ -95,10 +130,42 @@ pub async fn detect_repo_account(
     Ok(detected)
 }
 
+fn ssh_resolution_fields(
+    alias: Option<&str>,
+    resolved: Option<&ResolvedSshHost>,
+) -> (Option<String>, Option<String>, Option<PathBuf>) {
+    let Some(resolved) = resolved else {
+        return (alias.map(str::to_string), None, None);
+    };
+    let alias_name = alias.unwrap_or(resolved.alias.as_str());
+    let ssh_host_alias = if resolved.host_name != alias_name {
+        Some(alias_name.to_string())
+    } else {
+        None
+    };
+    let suggested_key = resolved.identity_files.first().cloned();
+    (
+        Some(resolved.host_name.clone()),
+        ssh_host_alias,
+        suggested_key,
+    )
+}
+
 fn match_account(detected: &DetectedRepoAccount, accounts: &[Account]) -> Option<AccountId> {
+    // Strongest SSH signal: same private key path.
+    if let Some(key) = detected.suggested_ssh_key_path.as_ref() {
+        if let Some(a) = accounts.iter().find(|a| {
+            a.auth_kind == AuthKind::SshKey
+                && a.ssh_private_key_path
+                    .as_ref()
+                    .is_some_and(|p| paths_equal_enough(p, key))
+        }) {
+            return Some(a.id);
+        }
+    }
+
     let username = detected.suggested_username.as_deref()?;
 
-    // Prefer exact provider + username + auth kind.
     if let Some(a) = accounts.iter().find(|a| {
         a.provider == detected.provider
             && a.auth_kind == detected.auth_kind
@@ -107,13 +174,22 @@ fn match_account(detected: &DetectedRepoAccount, accounts: &[Account]) -> Option
         return Some(a.id);
     }
 
-    // Fall back to provider + username (auth kind may differ).
     accounts
         .iter()
         .find(|a| {
             a.provider == detected.provider && a.username.eq_ignore_ascii_case(username)
         })
         .map(|a| a.id)
+}
+
+fn paths_equal_enough(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a.to_string_lossy() == b.to_string_lossy(),
+    }
 }
 
 fn pick_primary_remote(remotes: &[RemoteInfo]) -> Option<&RemoteInfo> {
@@ -349,6 +425,9 @@ mod tests {
             auth_kind: AuthKind::HttpsToken,
             suggested_username: Some("alice".into()),
             remote_host: Some("github.com".into()),
+            resolved_host: Some("github.com".into()),
+            ssh_host_alias: None,
+            suggested_ssh_key_path: None,
             remote_owner: Some("alice".into()),
             primary_remote_name: Some("origin".into()),
             primary_remote_url: Some("https://github.com/alice/r.git".into()),

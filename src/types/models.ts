@@ -51,6 +51,9 @@ export interface DetectedAccount {
   authKind: AuthKind;
   suggestedUsername: string | null;
   remoteHost: string | null;
+  resolvedHost: string | null;
+  sshHostAlias: string | null;
+  suggestedSshKeyPath: string | null;
   remoteOwner: string | null;
   primaryRemoteName: string | null;
   primaryRemoteUrl: string | null;

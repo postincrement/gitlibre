@@ -10,6 +10,7 @@ pub mod git;
 pub mod ids;
 pub mod models;
 pub mod secrets;
+pub mod ssh_config;
 pub mod store;
 
 pub use auth::GitAuth;
@@ -24,4 +25,5 @@ pub use models::{
     Account, AppConfig, AuthKind, HostingProvider, Repository, Workspace, CONFIG_VERSION,
 };
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore};
+pub use ssh_config::{resolve_alias, ResolvedSshHost, SshConfigFile};
 pub use store::ConfigStore;

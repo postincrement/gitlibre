@@ -89,8 +89,20 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 
 - Primary remote URL (`origin`, else first) → provider, HTTPS vs SSH, host, owner/login hint
 - Local `user.name` / `user.email` → optional commit identity (not auth)
+- `~/.ssh/config` via [`ssh_config.rs`](../crates/gitlibre-core/src/ssh_config.rs) when the remote host is an SSH alias → `HostName`, `User`, `IdentityFile`
 
-On **add repository** and when **opening an unassigned repo**, GitLibre runs detection. If an existing account matches provider + username, it is auto-assigned. Otherwise the UI offers “Create account from this…” with fields pre-filled (token/key still entered by the user).
+Example: `git@github-work:org/repo.git` with
+
+```
+Host github-work
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_ed25519_work
+```
+
+detects GitHub + SSH key `~/.ssh/id_ed25519_work`, and can match an existing account by that key path.
+
+On **add repository** and when **opening an unassigned repo**, GitLibre runs detection. If an existing account matches (provider + username, or SSH key path), it is auto-assigned. Otherwise the UI offers “Create account from this…” with fields pre-filled (HTTPS token still entered by the user).
 
 ## Future seams (not implemented yet)
 

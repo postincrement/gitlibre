@@ -91,3 +91,9 @@ Enum rename rules matter: `#[serde(rename_all = "snake_case")]` turns `GitHub` i
 **Where:** `migrate_config` in [`crates/gitlibre-core/src/models.rs`](../crates/gitlibre-core/src/models.rs)
 
 Persisted `version` lets us evolve the schema. Opening a v1 file fills defaults for new fields (`accounts`, `account_id`) and bumps to v2. Similar to a lightweight data migration without a database.
+
+## Parsing text formats without “stringly” APIs
+
+**Where:** [`crates/gitlibre-core/src/ssh_config.rs`](../crates/gitlibre-core/src/ssh_config.rs)
+
+OpenSSH config is line-oriented with optional `Key Value` or `Key=Value` forms. We parse into structured `HostBlock` values, then resolve with OpenSSH’s first-wins rule. Prefer returning typed results (`ResolvedSshHost`) over scattering string splits through callers — same instinct as parsing into a C++ struct instead of keeping `std::string` bags.

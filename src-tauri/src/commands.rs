@@ -299,14 +299,103 @@ pub async fn pick_directory(app: AppHandle) -> CmdResult<Option<String>> {
 
 #[tauri::command]
 pub async fn pick_file(app: AppHandle) -> CmdResult<Option<String>> {
-    let file = app
+    pick_ssh_key(app).await
+}
+
+/// Open a file dialog starting in `~/.ssh` so hidden-directory browsing is not required.
+#[tauri::command]
+pub async fn pick_ssh_key(app: AppHandle) -> CmdResult<Option<String>> {
+    let mut dialog = app
         .dialog()
         .file()
-        .set_title("Select SSH private key")
-        .blocking_pick_file();
+        .set_title("Select SSH private key");
+
+    if let Some(ssh_dir) = ssh_dir_path() {
+        if ssh_dir.is_dir() {
+            dialog = dialog.set_directory(&ssh_dir);
+        }
+    }
+
+    let file = dialog.blocking_pick_file();
     Ok(file
         .and_then(|p| p.into_path().ok())
         .map(|p| p.display().to_string()))
+}
+
+/// List likely private key files in `~/.ssh` for a one-click picker.
+#[tauri::command]
+pub fn list_ssh_private_keys() -> CmdResult<Vec<String>> {
+    let Some(ssh_dir) = ssh_dir_path() else {
+        return Ok(Vec::new());
+    };
+    if !ssh_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut keys = Vec::new();
+    let entries = std::fs::read_dir(&ssh_dir).map_err(|e| AppErrorDto {
+        code: "internal".into(),
+        message: format!("Could not read ~/.ssh: {e}"),
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if is_likely_ssh_private_key(&path) {
+            keys.push(path.display().to_string());
+        }
+    }
+    keys.sort();
+    Ok(keys)
+}
+
+fn ssh_dir_path() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".ssh"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            if !profile.is_empty() {
+                return Some(PathBuf::from(profile));
+            }
+        }
+    }
+    None
+}
+
+fn is_likely_ssh_private_key(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.starts_with('.') {
+        return false;
+    }
+    // Public keys, config, and known_hosts are not private keys.
+    const SKIP: &[&str] = &[
+        "config",
+        "known_hosts",
+        "known_hosts.old",
+        "authorized_keys",
+    ];
+    if SKIP.contains(&name) || name.ends_with(".pub") {
+        return false;
+    }
+    // Common private key names / extensions.
+    name.starts_with("id_")
+        || name.ends_with(".pem")
+        || name.ends_with("_rsa")
+        || name.ends_with("_ed25519")
+        || name.ends_with("_ecdsa")
+        || name == "identity"
 }
 
 #[tauri::command]

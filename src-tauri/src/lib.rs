@@ -45,6 +45,8 @@ pub fn run() {
             commands::set_repository_account,
             commands::pick_directory,
             commands::pick_file,
+            commands::pick_ssh_key,
+            commands::list_ssh_private_keys,
             commands::get_repository_status,
             commands::list_workspace_statuses,
             commands::fetch_repository,

@@ -67,7 +67,15 @@ export async function pickDirectory(): Promise<string | null> {
 }
 
 export async function pickFile(): Promise<string | null> {
-  return invoke<string | null>("pick_file");
+  return invoke<string | null>("pick_ssh_key");
+}
+
+export async function pickSshKey(): Promise<string | null> {
+  return invoke<string | null>("pick_ssh_key");
+}
+
+export async function listSshPrivateKeys(): Promise<string[]> {
+  return invoke<string[]>("list_ssh_private_keys");
 }
 
 export async function getRepositoryStatus(id: RepositoryId): Promise<RepoStatus> {
