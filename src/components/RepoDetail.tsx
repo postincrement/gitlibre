@@ -3,11 +3,9 @@ import type { RepoStatus } from "../types/models";
 
 interface RepoDetailProps {
   status: RepoStatus | null;
-  onFetch: () => void;
-  busy: boolean;
 }
 
-export function RepoDetail({ status, onFetch, busy }: RepoDetailProps) {
+export function RepoDetail({ status }: RepoDetailProps) {
   if (!status) {
     return (
       <main className="flex flex-1 items-center justify-center p-8 text-ink-muted">
@@ -20,21 +18,9 @@ export function RepoDetail({ status, onFetch, busy }: RepoDetailProps) {
 
   return (
     <main className="flex flex-1 flex-col overflow-y-auto p-6">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{status.displayName}</h1>
-          <p className="mt-1 break-all font-mono text-sm text-ink-muted">{status.path}</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onFetch}
-            disabled={busy || status.isFetching || !status.available}
-            className="btn-primary"
-          >
-            {status.isFetching ? "Fetching…" : "Fetch"}
-          </button>
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight">{status.displayName}</h1>
+        <p className="mt-1 break-all font-mono text-sm text-ink-muted">{status.path}</p>
       </div>
 
       {!status.available && (

@@ -143,15 +143,9 @@ export default function App() {
   const bindWorkspace = useCallback(
     async (id: WorkspaceId) => {
       await api.setActiveWorkspace(id);
-      const snap = await refreshSnapshot();
+      await refreshSnapshot();
       setWindowWorkspaceId(id);
       setShowSplash(false);
-      const name = snap.workspaces.find((w) => w.id === id)?.name;
-      try {
-        await getCurrentWindow().setTitle(name ? `GitLibre — ${name}` : "GitLibre");
-      } catch {
-        // Title updates are best-effort (e.g. browser-only preview).
-      }
       await refreshStatuses(id);
     },
     [refreshSnapshot, refreshStatuses],
@@ -304,6 +298,18 @@ export default function App() {
     () => statuses.find((s) => s.repositoryId === selectedId) ?? null,
     [statuses, selectedId],
   );
+
+  useEffect(() => {
+    if (!windowWorkspace) return;
+    const title = selected
+      ? `${windowWorkspace.name} / ${selected.displayName}`
+      : windowWorkspace.name;
+    void getCurrentWindow()
+      .setTitle(title)
+      .catch(() => {
+        // Title updates are best-effort (e.g. browser-only preview).
+      });
+  }, [windowWorkspace, selected]);
 
   async function handleCreateWorkspace(name: string) {
     setError(null);
@@ -494,7 +500,11 @@ export default function App() {
     <div className="flex h-full flex-col">
       <TopNav
         workspaceName={windowWorkspace?.name ?? null}
+        repoName={selected?.displayName ?? null}
+        canFetchRepo={Boolean(selected?.available)}
+        repoFetching={Boolean(selected?.isFetching)}
         busy={busy}
+        onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}
       />
       {error && (
@@ -515,7 +525,7 @@ export default function App() {
           onRemoveRepository={(id) => setPendingRemoveId(id)}
         />
         <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} />
-        <RepoDetail status={selected} onFetch={handleFetchOne} busy={busy} />
+        <RepoDetail status={selected} />
       </div>
       {accountsRepoContext && (
         <RepoAccountDialog
