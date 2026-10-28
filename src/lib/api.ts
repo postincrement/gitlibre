@@ -112,6 +112,13 @@ export async function listRepositoryBranches(
   });
 }
 
+export async function listRemoteBranches(
+  id: RepositoryId,
+  remoteName: string,
+): Promise<string[]> {
+  return invoke<string[]>("list_remote_branches", { id, remoteName });
+}
+
 export async function listWorkspaceStatuses(
   workspaceId: WorkspaceId,
 ): Promise<RepoStatus[]> {

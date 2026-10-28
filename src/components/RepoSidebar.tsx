@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BranchInfo, RepositoryId, RepoStatus } from "../types/models";
+import * as api from "../lib/api";
 
 interface RepoSidebarProps {
   statuses: RepoStatus[];
@@ -19,6 +20,10 @@ interface ContextMenuState {
   y: number;
 }
 
+type BranchTreeNode =
+  | { kind: "folder"; name: string; path: string; children: BranchTreeNode[] }
+  | { kind: "branch"; name: string; fullName: string };
+
 export function RepoSidebar({
   statuses,
   selectedId,
@@ -31,8 +36,77 @@ export function RepoSidebar({
   onRemoveRepository,
 }: RepoSidebarProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [expandedRemote, setExpandedRemote] = useState<string | null>(null);
+  const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
+  const [remoteBranchesLoading, setRemoteBranchesLoading] = useState(false);
+  const [remoteBranchesError, setRemoteBranchesError] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const selected = statuses.find((s) => s.repositoryId === selectedId) ?? null;
   const asideStyle = { width, minWidth: width, maxWidth: width };
+
+  useEffect(() => {
+    setExpandedRemote(null);
+    setRemoteBranches([]);
+    setRemoteBranchesError(null);
+    setExpandedFolders(new Set());
+  }, [selectedId]);
+
+  const remoteTree = useMemo(
+    () => buildBranchTree(remoteBranches),
+    [remoteBranches],
+  );
+
+  const toggleRemote = useCallback(
+    async (remoteName: string) => {
+      if (!selectedId) return;
+      if (expandedRemote === remoteName) {
+        setExpandedRemote(null);
+        setRemoteBranches([]);
+        setRemoteBranchesError(null);
+        return;
+      }
+      setExpandedRemote(remoteName);
+      setRemoteBranches([]);
+      setRemoteBranchesError(null);
+      setExpandedFolders(new Set());
+      setRemoteBranchesLoading(true);
+      try {
+        const names = await api.listRemoteBranches(selectedId, remoteName);
+        setRemoteBranches(names);
+        // Expand all folder prefixes so nested branches are reachable immediately.
+        const folders = new Set<string>();
+        for (const name of names) {
+          const parts = name.split("/");
+          let path = "";
+          for (let i = 0; i < parts.length - 1; i++) {
+            path = path ? `${path}/${parts[i]}` : parts[i];
+            folders.add(path);
+          }
+        }
+        setExpandedFolders(folders);
+      } catch (e) {
+        setRemoteBranchesError(
+          typeof e === "string"
+            ? e
+            : e && typeof e === "object" && "message" in e
+              ? String((e as { message: unknown }).message)
+              : "Failed to load remote branches",
+        );
+      } finally {
+        setRemoteBranchesLoading(false);
+      }
+    },
+    [expandedRemote, selectedId],
+  );
+
+  function toggleFolder(path: string) {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
 
   if (statuses.length === 0) {
     return (
@@ -162,7 +236,7 @@ export function RepoSidebar({
           })}
         </ul>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-border">
+        <div className="flex max-h-[35%] shrink-0 flex-col border-t border-border">
           <div className="shrink-0 border-b border-border px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
             Branches
             {selected ? ` — ${selected.displayName}` : ""}
@@ -174,7 +248,7 @@ export function RepoSidebar({
           ) : branches.length === 0 ? (
             <p className="shrink-0 p-2.5 text-ink-muted">No local branches.</p>
           ) : (
-            <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            <ul className="min-h-0 overflow-y-auto p-1.5">
               {branches.map((branch) => (
                 <li key={branch.name}>
                   <div
@@ -203,6 +277,66 @@ export function RepoSidebar({
             </ul>
           )}
         </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-border">
+          <div className="shrink-0 border-b border-border px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+            Remotes
+            {selected ? ` — ${selected.displayName}` : ""}
+          </div>
+          {!selected ? (
+            <p className="shrink-0 p-2.5 text-ink-muted">Select a repository.</p>
+          ) : !selected.available ? (
+            <p className="shrink-0 p-2.5 text-ink-muted">Repository unavailable.</p>
+          ) : selected.remotes.length === 0 ? (
+            <p className="shrink-0 p-2.5 text-ink-muted">No remotes configured.</p>
+          ) : (
+            <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
+              {[...selected.remotes]
+                .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+                .map((remote) => {
+                  const open = expandedRemote === remote.name;
+                  return (
+                    <li key={remote.name}>
+                      <button
+                        type="button"
+                        className={[
+                          "mb-0.5 flex w-full items-center gap-1 truncate rounded px-2 py-1 text-left transition",
+                          open
+                            ? "bg-accent/15 font-medium text-ink ring-1 ring-accent/40"
+                            : "text-ink hover:bg-surface-overlay",
+                        ].join(" ")}
+                        title={`${remote.name}\nfetch: ${remote.fetchUrl}\npush: ${remote.pushUrl}`}
+                        onClick={() => void toggleRemote(remote.name)}
+                      >
+                        <span className="w-2 shrink-0 text-[10px] text-ink-muted" aria-hidden>
+                          {open ? "▼" : "▶"}
+                        </span>
+                        <span className="truncate">{remote.name}</span>
+                      </button>
+                      {open && (
+                        <div className="mb-1 ml-2 border-l border-border pl-1.5">
+                          {remoteBranchesLoading ? (
+                            <p className="px-2 py-1 text-ink-muted">Loading…</p>
+                          ) : remoteBranchesError ? (
+                            <p className="px-2 py-1 text-danger">{remoteBranchesError}</p>
+                          ) : remoteTree.length === 0 ? (
+                            <p className="px-2 py-1 text-ink-muted">No remote branches.</p>
+                          ) : (
+                            <RemoteBranchTree
+                              nodes={remoteTree}
+                              expandedFolders={expandedFolders}
+                              onToggleFolder={toggleFolder}
+                              depth={0}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+            </ul>
+          )}
+        </div>
       </div>
 
       {menu && (
@@ -223,6 +357,118 @@ export function RepoSidebar({
         />
       )}
     </aside>
+  );
+}
+
+function buildBranchTree(names: string[]): BranchTreeNode[] {
+  type MutableNode =
+    | { kind: "folder"; name: string; path: string; children: Map<string, MutableNode> }
+    | { kind: "branch"; name: string; fullName: string };
+
+  const root = new Map<string, MutableNode>();
+
+  for (const fullName of names) {
+    const parts = fullName.split("/").filter(Boolean);
+    if (parts.length === 0) continue;
+    let level = root;
+    let path = "";
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      path = path ? `${path}/${part}` : part;
+      const isLeaf = i === parts.length - 1;
+      if (isLeaf) {
+        level.set(part, { kind: "branch", name: part, fullName });
+        continue;
+      }
+      const existing = level.get(part);
+      if (!existing || existing.kind !== "folder") {
+        const folder: MutableNode = {
+          kind: "folder",
+          name: part,
+          path,
+          children: new Map(),
+        };
+        level.set(part, folder);
+        level = folder.children;
+      } else {
+        level = existing.children;
+      }
+    }
+  }
+
+  function freeze(map: Map<string, MutableNode>): BranchTreeNode[] {
+    return [...map.values()]
+      .map((node): BranchTreeNode => {
+        if (node.kind === "branch") return node;
+        return {
+          kind: "folder",
+          name: node.name,
+          path: node.path,
+          children: freeze(node.children),
+        };
+      })
+      .sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      });
+  }
+
+  return freeze(root);
+}
+
+function RemoteBranchTree({
+  nodes,
+  expandedFolders,
+  onToggleFolder,
+  depth,
+}: {
+  nodes: BranchTreeNode[];
+  expandedFolders: Set<string>;
+  onToggleFolder: (path: string) => void;
+  depth: number;
+}) {
+  return (
+    <ul>
+      {nodes.map((node) => {
+        if (node.kind === "branch") {
+          return (
+            <li key={node.fullName}>
+              <div
+                className="truncate rounded px-2 py-0.5 text-ink-muted"
+                style={{ paddingLeft: `${0.5 + depth * 0.65}rem` }}
+                title={node.fullName}
+              >
+                {node.name}
+              </div>
+            </li>
+          );
+        }
+        const open = expandedFolders.has(node.path);
+        return (
+          <li key={node.path}>
+            <button
+              type="button"
+              className="flex w-full items-center gap-1 rounded px-2 py-0.5 text-left text-ink hover:bg-surface-overlay"
+              style={{ paddingLeft: `${0.5 + depth * 0.65}rem` }}
+              onClick={() => onToggleFolder(node.path)}
+            >
+              <span className="w-2 shrink-0 text-[10px] text-ink-muted" aria-hidden>
+                {open ? "▼" : "▶"}
+              </span>
+              <span className="truncate font-medium">{node.name}</span>
+            </button>
+            {open && (
+              <RemoteBranchTree
+                nodes={node.children}
+                expandedFolders={expandedFolders}
+                onToggleFolder={onToggleFolder}
+                depth={depth + 1}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

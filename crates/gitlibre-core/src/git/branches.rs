@@ -126,6 +126,66 @@ async fn count_ahead_behind(
     Ok(parse_left_right_count(&out.stdout_lossy()))
 }
 
+/// List remote-tracking branches for `remote`, as paths relative to that remote
+/// (e.g. `main`, `feature/x` — not `origin/main`).
+pub async fn list_remote_branches(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    remote: &str,
+) -> CoreResult<Vec<String>> {
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    if remote.is_empty() || remote.contains('/') || remote.contains('\\') {
+        return Err(CoreError::new(
+            crate::error::ErrorCode::Internal,
+            format!("Invalid remote name: {remote}"),
+        ));
+    }
+
+    let prefix = format!("refs/remotes/{remote}");
+    let out = executor
+        .run(
+            repo_path,
+            &["for-each-ref", "--format=%(refname:lstrip=3)", &prefix],
+        )
+        .await?;
+
+    if !out.success() {
+        return Err(CoreError::process_failed(format!(
+            "git for-each-ref failed: {}",
+            out.stderr_lossy().trim()
+        )));
+    }
+
+    Ok(parse_remote_branch_names(&out.stdout_lossy(), remote))
+}
+
+fn parse_remote_branch_names(text: &str, remote: &str) -> Vec<String> {
+    let head_symlink = format!("{remote}/HEAD");
+    let mut names: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| *line != head_symlink && *line != "HEAD")
+        .filter_map(|line| {
+            // Prefer names without the remote prefix; accept either form.
+            let name = line
+                .strip_prefix(&format!("{remote}/"))
+                .unwrap_or(line)
+                .to_string();
+            if name.is_empty() || name == "HEAD" {
+                None
+            } else {
+                Some(name)
+            }
+        })
+        .collect();
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    names.dedup();
+    names
+}
+
 fn parse_left_right_count(text: &str) -> (Option<u32>, Option<u32>) {
     let parts: Vec<&str> = text.trim().split_whitespace().collect();
     if parts.len() < 2 {
@@ -237,6 +297,13 @@ mod tests {
     fn parse_left_right() {
         assert_eq!(parse_left_right_count("2\t5\n"), (Some(5), Some(2)));
         assert_eq!(parse_left_right_count("0 0"), (Some(0), Some(0)));
+    }
+
+    #[test]
+    fn parse_remote_names_strips_prefix_and_head() {
+        let text = "origin/HEAD\norigin/main\norigin/feature/x\nmain\n";
+        let names = parse_remote_branch_names(text, "origin");
+        assert_eq!(names, vec!["feature/x", "main"]);
     }
 
     #[tokio::test]
