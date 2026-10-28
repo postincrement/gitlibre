@@ -60,6 +60,7 @@ pub fn run() {
             commands::get_repository_status,
             commands::list_repository_branches,
             commands::list_remote_branches,
+            commands::list_repository_commits,
             commands::list_workspace_statuses,
             commands::fetch_repository,
             commands::fetch_workspace,

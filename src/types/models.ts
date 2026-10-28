@@ -131,6 +131,16 @@ export interface BranchInfo {
   ahead: number | null;
 }
 
+export interface CommitInfo {
+  id: string;
+  shortId: string;
+  parents: string[];
+  subject: string;
+  authorName: string;
+  authoredAt: string;
+  refs: string[];
+}
+
 export interface FetchProgressEvent {
   repositoryId: RepositoryId;
   message: string;

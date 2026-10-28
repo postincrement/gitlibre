@@ -11,6 +11,7 @@ import type {
   RepoStatus,
   UpdateAccountRequest,
   BranchInfo,
+  CommitInfo,
   Workspace,
   WorkspaceFetchFinishedEvent,
   WorkspaceId,
@@ -117,6 +118,13 @@ export async function listRemoteBranches(
   remoteName: string,
 ): Promise<string[]> {
   return invoke<string[]>("list_remote_branches", { id, remoteName });
+}
+
+export async function listRepositoryCommits(
+  id: RepositoryId,
+  limit?: number,
+): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("list_repository_commits", { id, limit: limit ?? null });
 }
 
 export async function listWorkspaceStatuses(

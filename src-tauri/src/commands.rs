@@ -543,6 +543,28 @@ pub async fn list_remote_branches(
 }
 
 #[tauri::command]
+pub async fn list_repository_commits(
+    id: RepositoryId,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<gitlibre_core::CommitInfo>> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    gitlibre_core::list_commits(state.coordinator.executor(), &path, limit)
+        .await
+        .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
 pub async fn get_repository_status(
     id: RepositoryId,
     state: State<'_, AppState>,
