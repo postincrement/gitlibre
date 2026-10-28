@@ -1,5 +1,5 @@
 use crate::error::{CoreError, CoreResult};
-use crate::git::{GitExecutor, RemoteInfo};
+use crate::git::{read_commit_identity, GitExecutor, RemoteInfo};
 use crate::ids::AccountId;
 use crate::models::{Account, AuthKind, HostingProvider};
 use crate::ssh_config::{resolve_alias, ResolvedSshHost};
@@ -32,6 +32,8 @@ pub struct DetectedRepoAccount {
     pub primary_remote_url: Option<String>,
     pub commit_name: Option<String>,
     pub commit_email: Option<String>,
+    /// True when name/email came from this repo's local `.git/config` (not only global).
+    pub commit_identity_is_local: bool,
     /// Existing GitLibre account that matches these hints, if any.
     pub matched_account_id: Option<AccountId>,
 }
@@ -62,8 +64,7 @@ pub async fn detect_repo_account(
         .map(|r| parse_remote_url(&r.fetch_url))
         .unwrap_or(None);
 
-    let commit_name = git_config_local(executor, repo_path, "user.name").await?;
-    let commit_email = git_config_local(executor, repo_path, "user.email").await?;
+    let commit_identity = read_commit_identity(executor, repo_path).await?;
 
     let ssh_resolved = parsed.as_ref().and_then(|p| {
         if p.auth_kind == AuthKind::SshKey {
@@ -121,8 +122,9 @@ pub async fn detect_repo_account(
         remote_owner: owner,
         primary_remote_name: primary.map(|r| r.name.clone()),
         primary_remote_url: primary.map(|r| r.fetch_url.clone()),
-        commit_name,
-        commit_email,
+        commit_name: commit_identity.name,
+        commit_email: commit_identity.email,
+        commit_identity_is_local: commit_identity.is_local,
         matched_account_id: None,
     };
 
@@ -239,25 +241,6 @@ fn parse_remotes_text(text: &str) -> Vec<RemoteInfo> {
             }
         })
         .collect()
-}
-
-async fn git_config_local(
-    executor: &GitExecutor,
-    repo_path: &Path,
-    key: &str,
-) -> CoreResult<Option<String>> {
-    let out = executor
-        .run(repo_path, &["config", "--local", "--get", key])
-        .await?;
-    if !out.success() {
-        return Ok(None);
-    }
-    let value = out.stdout_lossy().trim().to_string();
-    Ok(if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    })
 }
 
 /// Parse common Git remote URL forms into provider/auth/owner hints.
@@ -433,6 +416,7 @@ mod tests {
             primary_remote_url: Some("https://github.com/alice/r.git".into()),
             commit_name: None,
             commit_email: None,
+            commit_identity_is_local: false,
             matched_account_id: None,
         };
         let id = AccountId::new();
@@ -491,6 +475,7 @@ mod tests {
         assert_eq!(detected.suggested_username.as_deref(), Some("scrypos"));
         assert_eq!(detected.commit_name.as_deref(), Some("Scry Dev"));
         assert_eq!(detected.commit_email.as_deref(), Some("dev@scry.example"));
+        assert!(detected.commit_identity_is_local);
         assert!(detected.matched_account_id.is_none());
     }
 }

@@ -110,6 +110,21 @@ pub struct CreateAccountRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateAccountRequest {
+    pub id: AccountId,
+    pub provider: HostingProvider,
+    pub auth_kind: AuthKind,
+    pub username: String,
+    pub display_name: String,
+    pub commit_name: Option<String>,
+    pub commit_email: Option<String>,
+    pub ssh_private_key_path: Option<PathBuf>,
+    /// When set and non-empty, replaces the keychain token. Empty/omitted keeps the existing token.
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DetectedAccountDto {
     pub provider: HostingProvider,
     pub auth_kind: AuthKind,
@@ -123,6 +138,7 @@ pub struct DetectedAccountDto {
     pub primary_remote_url: Option<String>,
     pub commit_name: Option<String>,
     pub commit_email: Option<String>,
+    pub commit_identity_is_local: bool,
     pub matched_account_id: Option<AccountId>,
 }
 
@@ -141,6 +157,7 @@ impl From<DetectedRepoAccount> for DetectedAccountDto {
             primary_remote_url: d.primary_remote_url,
             commit_name: d.commit_name,
             commit_email: d.commit_email,
+            commit_identity_is_local: d.commit_identity_is_local,
             matched_account_id: d.matched_account_id,
         }
     }
@@ -178,6 +195,12 @@ pub struct RepoStatusDto {
     pub last_error: Option<String>,
     pub last_fetch_summary: Option<String>,
     pub account_id: Option<AccountId>,
+    /// Effective `user.name` for this repo (local preferred over global).
+    pub commit_name: Option<String>,
+    /// Effective `user.email` for this repo (local preferred over global).
+    pub commit_email: Option<String>,
+    /// True when name and/or email are set in this repo's local `.git/config`.
+    pub commit_identity_is_local: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

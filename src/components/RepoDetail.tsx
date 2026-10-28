@@ -122,6 +122,30 @@ export function RepoDetail({
               ? "Clean"
               : "Modified"}
         </InfoCard>
+        <InfoCard label="Commit name">
+          {!status.available
+            ? "—"
+            : status.commitName
+              ? status.commitName
+              : "Not set"}
+          {status.available && status.commitName && (
+            <span className="ml-2 text-xs font-normal text-ink-muted">
+              {status.commitIdentityIsLocal ? "(repo)" : "(global)"}
+            </span>
+          )}
+        </InfoCard>
+        <InfoCard label="Commit email">
+          {!status.available
+            ? "—"
+            : status.commitEmail
+              ? status.commitEmail
+              : "Not set"}
+          {status.available && status.commitEmail && (
+            <span className="ml-2 text-xs font-normal text-ink-muted">
+              {status.commitIdentityIsLocal ? "(repo)" : "(global)"}
+            </span>
+          )}
+        </InfoCard>
       </section>
 
       <section className="mb-6">

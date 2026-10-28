@@ -42,8 +42,8 @@ export function DetectedAccountBanner({
       )}
       {(detection.commitName || detection.commitEmail) && (
         <p className="mt-1 text-xs text-ink-muted">
-          Local commit identity: {detection.commitName ?? "—"} &lt;
-          {detection.commitEmail ?? "—"}&gt;
+          {detection.commitIdentityIsLocal ? "Repo" : "Effective"} commit identity:{" "}
+          {detection.commitName ?? "—"} &lt;{detection.commitEmail ?? "—"}&gt;
         </p>
       )}
       <div className="mt-3 flex flex-wrap gap-2">

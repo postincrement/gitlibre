@@ -270,6 +270,20 @@ impl ConfigStore {
 
     pub fn update_account(&mut self, account: Account) -> CoreResult<Account> {
         validate_account(&account)?;
+        if self.config.accounts.iter().any(|a| {
+            a.id != account.id
+                && a.provider == account.provider
+                && a.username == account.username
+        }) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidAccount,
+                format!(
+                    "An account for {} / {} already exists.",
+                    account.provider.as_str(),
+                    account.username
+                ),
+            ));
+        }
         let Some(slot) = self.config.accounts.iter_mut().find(|a| a.id == account.id) else {
             return Err(CoreError::account_not_found());
         };

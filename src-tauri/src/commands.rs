@@ -1,7 +1,7 @@
 use crate::dto::{
     AccountDto, AddRepositoryResult, AppErrorDto, AppSnapshot, CmdResult, CreateAccountRequest,
     DetectedAccountDto, FetchFinishedEvent, FetchProgressEvent, RepoStatusDto, RepositoryDto,
-    WorkspaceDto, WorkspaceFetchFinishedEvent,
+    UpdateAccountRequest, WorkspaceDto, WorkspaceFetchFinishedEvent,
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
@@ -263,6 +263,84 @@ pub fn create_account(
 }
 
 #[tauri::command]
+pub fn update_account(
+    request: UpdateAccountRequest,
+    state: State<'_, AppState>,
+) -> CmdResult<AccountDto> {
+    let existing = {
+        let store = lock_store(&state)?;
+        store
+            .get_account(request.id)
+            .cloned()
+            .ok_or_else(|| AppErrorDto::from(CoreError::account_not_found()))?
+    };
+
+    let account = Account {
+        id: request.id,
+        provider: request.provider,
+        auth_kind: request.auth_kind,
+        username: request.username.trim().to_string(),
+        display_name: {
+            let name = request.display_name.trim();
+            if name.is_empty() {
+                request.username.trim().to_string()
+            } else {
+                name.to_string()
+            }
+        },
+        commit_name: request
+            .commit_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        commit_email: request
+            .commit_email
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        ssh_private_key_path: if matches!(request.auth_kind, AuthKind::SshKey) {
+            request.ssh_private_key_path
+        } else {
+            None
+        },
+    };
+
+    let new_token = request
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+
+    match account.auth_kind {
+        AuthKind::HttpsToken => {
+            if let Some(token) = new_token {
+                state
+                    .secrets
+                    .set_token(account.id, token)
+                    .map_err(AppErrorDto::from)?;
+            } else if !matches!(existing.auth_kind, AuthKind::HttpsToken)
+                || state.secrets.get_token(account.id).ok().flatten().is_none()
+            {
+                return Err(AppErrorDto::from(CoreError::new(
+                    gitlibre_core::ErrorCode::InvalidAccount,
+                    "HTTPS accounts require a personal access token.",
+                )));
+            }
+        }
+        AuthKind::SshKey => {
+            // Switching away from HTTPS: drop any leftover keychain secret.
+            if matches!(existing.auth_kind, AuthKind::HttpsToken) {
+                let _ = state.secrets.delete_token(account.id);
+            }
+        }
+    }
+
+    let mut store = lock_store(&state)?;
+    let saved = store.update_account(account).map_err(AppErrorDto::from)?;
+    let has_token = matches!(saved.auth_kind, AuthKind::HttpsToken)
+        && state.secrets.get_token(saved.id).ok().flatten().is_some();
+    Ok(AccountDto::from_account(saved, has_token))
+}
+
+#[tauri::command]
 pub fn delete_account(id: AccountId, state: State<'_, AppState>) -> CmdResult<AppSnapshot> {
     {
         let mut store = lock_store(&state)?;
@@ -469,6 +547,9 @@ async fn status_for_repo(
             last_error: Some("Repository path no longer exists".into()),
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            commit_name: None,
+            commit_email: None,
+            commit_identity_is_local: false,
         });
     }
 
@@ -486,6 +567,9 @@ async fn status_for_repo(
             last_error: live.last_error,
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            commit_name: info.commit_name,
+            commit_email: info.commit_email,
+            commit_identity_is_local: info.commit_identity_is_local,
         }),
         Err(err) => Ok(RepoStatusDto {
             repository_id: id,
@@ -500,6 +584,9 @@ async fn status_for_repo(
             last_error: Some(err.message),
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            commit_name: None,
+            commit_email: None,
+            commit_identity_is_local: false,
         }),
     }
 }

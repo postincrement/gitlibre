@@ -5,6 +5,7 @@ import type {
   CreateAccountRequest,
   DetectedAccount,
   HostingProvider,
+  UpdateAccountRequest,
 } from "../types/models";
 import { Modal } from "./Modal";
 import * as api from "../lib/api";
@@ -17,6 +18,7 @@ interface AccountsPanelProps {
 
 export function AccountsPanel({ accounts, onChanged, onClose }: AccountsPanelProps) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Account | null>(null);
@@ -71,14 +73,24 @@ export function AccountsPanel({ accounts, onChanged, onClose }: AccountsPanelPro
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                className="btn-secondary shrink-0 text-danger"
-                disabled={busy}
-                onClick={() => setPendingDelete(account)}
-              >
-                Remove
-              </button>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={busy}
+                  onClick={() => setEditing(account)}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-danger"
+                  disabled={busy}
+                  onClick={() => setPendingDelete(account)}
+                >
+                  Remove
+                </button>
+              </div>
             </li>
           ))}
         </ul>
@@ -98,6 +110,16 @@ export function AccountsPanel({ accounts, onChanged, onClose }: AccountsPanelPro
           onCancel={() => setShowAdd(false)}
           onCreated={async () => {
             setShowAdd(false);
+            await onChanged();
+          }}
+        />
+      )}
+      {editing && (
+        <EditAccountForm
+          account={editing}
+          onCancel={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
             await onChanged();
           }}
         />
@@ -199,9 +221,187 @@ export function AddAccountForm({
   }
 
   return (
+    <AccountFormShell
+      title={title}
+      draft={draft}
+      error={error}
+      busy={busy}
+      provider={provider}
+      setProvider={setProvider}
+      authKind={authKind}
+      setAuthKind={setAuthKind}
+      username={username}
+      setUsername={setUsername}
+      displayName={displayName}
+      setDisplayName={setDisplayName}
+      token={token}
+      setToken={setToken}
+      tokenRequired
+      tokenHint={null}
+      commitName={commitName}
+      setCommitName={setCommitName}
+      commitEmail={commitEmail}
+      setCommitEmail={setCommitEmail}
+      sshPath={sshPath}
+      setSshPath={setSshPath}
+      sshKeys={sshKeys}
+      onCancel={onCancel}
+      onSubmit={handleSubmit}
+      submitLabel="Save account"
+    />
+  );
+}
+
+function EditAccountForm({
+  account,
+  onCancel,
+  onSaved,
+}: {
+  account: Account;
+  onCancel: () => void;
+  onSaved: (account: Account) => Promise<void>;
+}) {
+  const [provider, setProvider] = useState<HostingProvider>(account.provider);
+  const [authKind, setAuthKind] = useState<AuthKind>(account.authKind);
+  const [username, setUsername] = useState(account.username);
+  const [displayName, setDisplayName] = useState(account.displayName);
+  const [token, setToken] = useState("");
+  const [commitName, setCommitName] = useState(account.commitName ?? "");
+  const [commitEmail, setCommitEmail] = useState(account.commitEmail ?? "");
+  const [sshPath, setSshPath] = useState(account.sshPrivateKeyPath ?? "");
+  const [sshKeys, setSshKeys] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (authKind !== "ssh_key") return;
+    void api.listSshPrivateKeys().then((keys) => {
+      setSshKeys(keys);
+    });
+  }, [authKind]);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const request: UpdateAccountRequest = {
+      id: account.id,
+      provider,
+      authKind,
+      username: username.trim(),
+      displayName: displayName.trim() || username.trim(),
+      commitName: commitName.trim() || null,
+      commitEmail: commitEmail.trim() || null,
+      sshPrivateKeyPath: authKind === "ssh_key" ? sshPath || null : null,
+      token: authKind === "https_token" ? token || null : null,
+    };
+    try {
+      setBusy(true);
+      setError(null);
+      const saved = await api.updateAccount(request);
+      await onSaved(saved);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const needsNewToken = authKind === "https_token" && !account.hasToken;
+  const tokenHint =
+    authKind === "https_token" && account.hasToken && account.authKind === "https_token"
+      ? "Leave blank to keep the saved token."
+      : null;
+
+  return (
+    <AccountFormShell
+      title="Edit account"
+      draft={null}
+      error={error}
+      busy={busy}
+      provider={provider}
+      setProvider={setProvider}
+      authKind={authKind}
+      setAuthKind={setAuthKind}
+      username={username}
+      setUsername={setUsername}
+      displayName={displayName}
+      setDisplayName={setDisplayName}
+      token={token}
+      setToken={setToken}
+      tokenRequired={needsNewToken}
+      tokenHint={tokenHint}
+      commitName={commitName}
+      setCommitName={setCommitName}
+      commitEmail={commitEmail}
+      setCommitEmail={setCommitEmail}
+      sshPath={sshPath}
+      setSshPath={setSshPath}
+      sshKeys={sshKeys}
+      onCancel={onCancel}
+      onSubmit={handleSubmit}
+      submitLabel="Save changes"
+    />
+  );
+}
+
+function AccountFormShell({
+  title,
+  draft,
+  error,
+  busy,
+  provider,
+  setProvider,
+  authKind,
+  setAuthKind,
+  username,
+  setUsername,
+  displayName,
+  setDisplayName,
+  token,
+  setToken,
+  tokenRequired,
+  tokenHint,
+  commitName,
+  setCommitName,
+  commitEmail,
+  setCommitEmail,
+  sshPath,
+  setSshPath,
+  sshKeys,
+  onCancel,
+  onSubmit,
+  submitLabel,
+}: {
+  title: string;
+  draft?: DetectedAccount | null;
+  error: string | null;
+  busy: boolean;
+  provider: HostingProvider;
+  setProvider: (v: HostingProvider) => void;
+  authKind: AuthKind;
+  setAuthKind: (v: AuthKind) => void;
+  username: string;
+  setUsername: (v: string) => void;
+  displayName: string;
+  setDisplayName: (v: string) => void;
+  token: string;
+  setToken: (v: string) => void;
+  tokenRequired: boolean;
+  tokenHint: string | null;
+  commitName: string;
+  setCommitName: (v: string) => void;
+  commitEmail: string;
+  setCommitEmail: (v: string) => void;
+  sshPath: string;
+  setSshPath: (v: string) => void;
+  sshKeys: string[];
+  onCancel: () => void;
+  onSubmit: (e: FormEvent) => void;
+  submitLabel: string;
+}) {
+  return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <form
-        onSubmit={handleSubmit}
+        onSubmit={onSubmit}
         className="w-full max-w-md rounded-lg border border-border bg-surface-raised p-4 shadow-xl"
       >
         <h3 className="mb-3 text-base font-semibold">{title}</h3>
@@ -278,9 +478,11 @@ export function AddAccountForm({
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              required
+              required={tokenRequired}
               autoComplete="off"
+              placeholder={tokenHint ? "••••••••" : undefined}
             />
+            {tokenHint && <p className="mt-1 text-xs text-ink-muted">{tokenHint}</p>}
           </Field>
         ) : (
           <Field label="SSH private key path">
@@ -337,7 +539,7 @@ export function AddAccountForm({
             Cancel
           </button>
           <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? "Saving…" : "Save account"}
+            {busy ? "Saving…" : submitLabel}
           </button>
         </div>
       </form>

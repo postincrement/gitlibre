@@ -41,6 +41,7 @@ pub fn run() {
             commands::remove_repository,
             commands::detect_repository_account,
             commands::create_account,
+            commands::update_account,
             commands::delete_account,
             commands::set_repository_account,
             commands::pick_directory,

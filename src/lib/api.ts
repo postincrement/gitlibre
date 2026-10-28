@@ -9,6 +9,7 @@ import type {
   Repository,
   RepositoryId,
   RepoStatus,
+  UpdateAccountRequest,
   Workspace,
   WorkspaceFetchFinishedEvent,
   WorkspaceId,
@@ -46,6 +47,10 @@ export async function removeRepository(id: RepositoryId): Promise<AppSnapshot> {
 
 export async function createAccount(request: CreateAccountRequest): Promise<Account> {
   return invoke<Account>("create_account", { request });
+}
+
+export async function updateAccount(request: UpdateAccountRequest): Promise<Account> {
+  return invoke<Account>("update_account", { request });
 }
 
 export async function deleteAccount(id: AccountId): Promise<AppSnapshot> {

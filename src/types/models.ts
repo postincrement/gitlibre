@@ -46,6 +46,19 @@ export interface CreateAccountRequest {
   token?: string | null;
 }
 
+export interface UpdateAccountRequest {
+  id: AccountId;
+  provider: HostingProvider;
+  authKind: AuthKind;
+  username: string;
+  displayName: string;
+  commitName?: string | null;
+  commitEmail?: string | null;
+  sshPrivateKeyPath?: string | null;
+  /** Non-empty replaces the keychain token; omit/empty keeps the existing token. */
+  token?: string | null;
+}
+
 export interface DetectedAccount {
   provider: HostingProvider;
   authKind: AuthKind;
@@ -59,6 +72,7 @@ export interface DetectedAccount {
   primaryRemoteUrl: string | null;
   commitName: string | null;
   commitEmail: string | null;
+  commitIdentityIsLocal: boolean;
   matchedAccountId: AccountId | null;
 }
 
@@ -103,6 +117,9 @@ export interface RepoStatus {
   lastError: string | null;
   lastFetchSummary: string | null;
   accountId: AccountId | null;
+  commitName: string | null;
+  commitEmail: string | null;
+  commitIdentityIsLocal: boolean;
 }
 
 export interface FetchProgressEvent {

@@ -1,5 +1,6 @@
 use crate::error::{CoreError, CoreResult};
 use crate::git::executor::GitExecutor;
+use crate::git::identity::read_commit_identity;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -45,6 +46,12 @@ pub struct RepoInspection {
     pub remotes: Vec<RemoteInfo>,
     pub working_tree: WorkingTreeStatus,
     pub upstream: Option<String>,
+    /// Effective `user.name` for this repo (local preferred over global).
+    pub commit_name: Option<String>,
+    /// Effective `user.email` for this repo (local preferred over global).
+    pub commit_email: Option<String>,
+    /// True when name and/or email are set in this repo's local `.git/config`.
+    pub commit_identity_is_local: bool,
 }
 
 /// Inspect a local Git repository using porcelain v2 status and related commands.
@@ -90,6 +97,7 @@ pub async fn inspect_repository(
     let detached_head = current_branch.is_none() && parsed.head_oid.is_some();
 
     let remotes = list_remotes(executor, repo_path).await?;
+    let identity = read_commit_identity(executor, repo_path).await?;
 
     Ok(RepoInspection {
         current_branch: current_branch.or(parsed.branch),
@@ -97,6 +105,9 @@ pub async fn inspect_repository(
         remotes,
         working_tree: parsed.working_tree,
         upstream: parsed.upstream,
+        commit_name: identity.name,
+        commit_email: identity.email,
+        commit_identity_is_local: identity.is_local,
     })
 }
 
