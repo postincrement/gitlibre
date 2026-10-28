@@ -122,6 +122,15 @@ export interface RepoStatus {
   commitIdentityIsLocal: boolean;
 }
 
+export interface BranchInfo {
+  name: string;
+  isCurrent: boolean;
+  /** Commits on the selected remote branch not present locally; null if no remote ref. */
+  behind: number | null;
+  /** Commits on the local branch not present on the remote; null if no remote ref. */
+  ahead: number | null;
+}
+
 export interface FetchProgressEvent {
   repositoryId: RepositoryId;
   message: string;

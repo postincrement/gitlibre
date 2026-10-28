@@ -10,6 +10,7 @@ import type {
   RepositoryId,
   RepoStatus,
   UpdateAccountRequest,
+  BranchInfo,
   Workspace,
   WorkspaceFetchFinishedEvent,
   WorkspaceId,
@@ -99,6 +100,16 @@ export async function listSshPrivateKeys(): Promise<string[]> {
 
 export async function getRepositoryStatus(id: RepositoryId): Promise<RepoStatus> {
   return invoke<RepoStatus>("get_repository_status", { id });
+}
+
+export async function listRepositoryBranches(
+  id: RepositoryId,
+  remoteName?: string | null,
+): Promise<BranchInfo[]> {
+  return invoke<BranchInfo[]>("list_repository_branches", {
+    id,
+    remoteName: remoteName ?? null,
+  });
 }
 
 export async function listWorkspaceStatuses(

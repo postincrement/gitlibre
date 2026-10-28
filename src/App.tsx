@@ -6,6 +6,10 @@ import { RepoDetail } from "./components/RepoDetail";
 import { ConfirmModal } from "./components/Modal";
 import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
 import { RepoAccountDialog } from "./components/RepoAccountDialog";
+import {
+  loadSidebarWidth,
+  SidebarResizeHandle,
+} from "./components/SidebarResizeHandle";
 import { WorkspaceOpenModal } from "./components/WorkspaceOpenModal";
 import * as api from "./lib/api";
 import {
@@ -19,6 +23,7 @@ import {
 import type {
   AccountId,
   AppSnapshot,
+  BranchInfo,
   DetectedAccount,
   RepositoryId,
   RepoStatus,
@@ -48,6 +53,8 @@ export default function App() {
   const [windowWorkspaceId, setWindowWorkspaceId] = useState<WorkspaceId | null>(null);
   const [statuses, setStatuses] = useState<RepoStatus[]>([]);
   const [selectedId, setSelectedId] = useState<RepositoryId | null>(null);
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -66,28 +73,66 @@ export default function App() {
   const [showCreateFromDetection, setShowCreateFromDetection] = useState(false);
   const detectedForRepos = useRef(new Set<RepositoryId>());
   const windowWorkspaceIdRef = useRef<WorkspaceId | null>(null);
+  const selectedIdRef = useRef<RepositoryId | null>(null);
 
   useEffect(() => {
     windowWorkspaceIdRef.current = windowWorkspaceId;
   }, [windowWorkspaceId]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const windowWorkspace = useMemo(
     () => snapshot.workspaces.find((w) => w.id === windowWorkspaceId) ?? null,
     [snapshot.workspaces, windowWorkspaceId],
   );
 
-  const refreshStatuses = useCallback(async (workspaceId: WorkspaceId) => {
-    try {
-      const list = await api.listWorkspaceStatuses(workspaceId);
-      setStatuses(list);
-      setSelectedId((prev) => {
-        if (prev && list.some((s) => s.repositoryId === prev)) return prev;
-        return list[0]?.repositoryId ?? null;
-      });
-    } catch (e) {
-      setError(formatError(e));
-    }
-  }, []);
+  const refreshBranches = useCallback(
+    async (repositoryId: RepositoryId | null, remotes?: RepoStatus["remotes"]) => {
+      if (!repositoryId) {
+        setBranches([]);
+        return;
+      }
+      const remoteName =
+        remotes?.find((r) => r.name === "origin")?.name ?? remotes?.[0]?.name ?? null;
+      try {
+        const list = await api.listRepositoryBranches(repositoryId, remoteName);
+        setBranches(list);
+      } catch {
+        setBranches([]);
+      }
+    },
+    [],
+  );
+
+  const refreshStatuses = useCallback(
+    async (workspaceId: WorkspaceId) => {
+      try {
+        const list = await api.listWorkspaceStatuses(workspaceId);
+        setStatuses(list);
+        setSelectedId((prev) => {
+          const next =
+            prev && list.some((s) => s.repositoryId === prev)
+              ? prev
+              : (list[0]?.repositoryId ?? null);
+          const remotes = list.find((s) => s.repositoryId === next)?.remotes;
+          void refreshBranches(next, remotes);
+          return next;
+        });
+      } catch (e) {
+        setError(formatError(e));
+      }
+    },
+    [refreshBranches],
+  );
+
+  useEffect(() => {
+    const remotes = statuses.find((s) => s.repositoryId === selectedId)?.remotes;
+    void refreshBranches(selectedId, remotes);
+    // Only when the selected repository changes; status refreshes call refreshBranches themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, refreshBranches]);
 
   const refreshSnapshot = useCallback(async () => {
     const snap = await api.getSnapshot();
@@ -199,6 +244,9 @@ export default function App() {
             setStatuses((prev) =>
               prev.map((s) => (s.repositoryId === fresh.repositoryId ? fresh : s)),
             );
+            if (fresh.repositoryId === selectedIdRef.current) {
+              void refreshBranches(fresh.repositoryId, fresh.remotes);
+            }
           });
         }),
       );
@@ -207,7 +255,10 @@ export default function App() {
           if (cancelled) return;
           setBusy(false);
           const id = windowWorkspaceIdRef.current;
-          if (id) void refreshStatuses(id);
+          if (id) {
+            void refreshStatuses(id);
+            if (selectedIdRef.current) void refreshBranches(selectedIdRef.current);
+          }
         }),
       );
       unlisteners.push(
@@ -247,7 +298,7 @@ export default function App() {
       cancelled = true;
       for (const off of unlisteners) off();
     };
-  }, [refreshStatuses]);
+  }, [refreshStatuses, refreshBranches]);
 
   const selected = useMemo(
     () => statuses.find((s) => s.repositoryId === selectedId) ?? null,
@@ -455,12 +506,15 @@ export default function App() {
         <RepoSidebar
           statuses={statuses}
           selectedId={selectedId}
+          branches={branches}
+          width={sidebarWidth}
           busy={busy}
           onSelect={setSelectedId}
           onAddRepository={handleAddRepository}
           onManageAccounts={(id) => setAccountsRepoId(id)}
           onRemoveRepository={(id) => setPendingRemoveId(id)}
         />
+        <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} />
         <RepoDetail status={selected} onFetch={handleFetchOne} busy={busy} />
       </div>
       {accountsRepoContext && (

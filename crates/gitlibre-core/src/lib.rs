@@ -21,8 +21,8 @@ pub use detect::{
 pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
 pub use git::{
-    inspect_repository, read_commit_identity, CommitIdentity, GitExecutor, RemoteInfo,
-    RepoInspection, WorkingTreeStatus,
+    inspect_repository, list_local_branches, list_local_branches_for_remote, read_commit_identity,
+    BranchInfo, CommitIdentity, GitExecutor, RemoteInfo, RepoInspection, WorkingTreeStatus,
 };
 pub use ids::{AccountId, RepositoryId, WorkspaceId};
 pub use models::{

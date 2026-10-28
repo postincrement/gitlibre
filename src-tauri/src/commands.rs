@@ -5,8 +5,8 @@ use crate::dto::{
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
-    detect_repo_account, detect_repo_account_from_remote, inspect_repository, Account, AccountId,
-    AuthKind, CoreError, GitAuth,
+    detect_repo_account, detect_repo_account_from_remote, inspect_repository,
+    list_local_branches_for_remote, Account, AccountId, AuthKind, BranchInfo, CoreError, GitAuth,
     RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
@@ -488,6 +488,32 @@ fn is_likely_ssh_private_key(path: &std::path::Path) -> bool {
         || name.ends_with("_ed25519")
         || name.ends_with("_ecdsa")
         || name == "identity"
+}
+
+#[tauri::command]
+pub async fn list_repository_branches(
+    id: RepositoryId,
+    remote_name: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<BranchInfo>> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    list_local_branches_for_remote(
+        state.coordinator.executor(),
+        &path,
+        remote_name.as_deref(),
+    )
+    .await
+    .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
