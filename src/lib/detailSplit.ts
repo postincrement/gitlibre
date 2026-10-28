@@ -92,3 +92,44 @@ export function persistFilesListWidth(workspaceId: WorkspaceId, width: number) {
 export function clampFilesListWidth(width: number): number {
   return clamp(width, MIN_FILES_LIST_WIDTH, MAX_FILES_LIST_WIDTH);
 }
+
+const COMMIT_INFO_HEIGHT_KEY = "gitlibre.commitInfoPaneHeight.byWorkspace";
+
+export const DEFAULT_COMMIT_INFO_HEIGHT = 140;
+export const MIN_COMMIT_INFO_HEIGHT = 88;
+export const MAX_COMMIT_INFO_HEIGHT = 360;
+
+function readInfoHeights(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(COMMIT_INFO_HEIGHT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+export function loadCommitInfoHeight(
+  workspaceId: WorkspaceId,
+  fallback = DEFAULT_COMMIT_INFO_HEIGHT,
+): number {
+  const value = readInfoHeights()[workspaceId];
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return clamp(value, MIN_COMMIT_INFO_HEIGHT, MAX_COMMIT_INFO_HEIGHT);
+}
+
+export function persistCommitInfoHeight(workspaceId: WorkspaceId, height: number) {
+  try {
+    const all = readInfoHeights();
+    all[workspaceId] = clamp(height, MIN_COMMIT_INFO_HEIGHT, MAX_COMMIT_INFO_HEIGHT);
+    localStorage.setItem(COMMIT_INFO_HEIGHT_KEY, JSON.stringify(all));
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
+
+export function clampCommitInfoHeight(height: number): number {
+  return clamp(height, MIN_COMMIT_INFO_HEIGHT, MAX_COMMIT_INFO_HEIGHT);
+}

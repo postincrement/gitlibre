@@ -12,13 +12,20 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
-import { isUncommittedCommit } from "../lib/commitGraphLayout";
 import {
+  formatCommitTime,
+  isUncommittedCommit,
+} from "../lib/commitGraphLayout";
+import {
+  clampCommitInfoHeight,
   clampFilesListWidth,
+  loadCommitInfoHeight,
   loadFilesListWidth,
+  persistCommitInfoHeight,
   persistFilesListWidth,
 } from "../lib/detailSplit";
 import { DiffView } from "./DiffView";
+import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
 interface CommitFilesPaneProps {
   workspaceId: WorkspaceId;
@@ -44,14 +51,22 @@ export function CommitFilesPane({
   const [filesWidth, setFilesWidth] = useState(() =>
     loadFilesListWidth(workspaceId),
   );
+  const [infoHeight, setInfoHeight] = useState(() =>
+    loadCommitInfoHeight(workspaceId),
+  );
   const filesWidthRef = useRef(filesWidth);
+  const infoHeightRef = useRef(infoHeight);
 
   useEffect(() => {
     filesWidthRef.current = filesWidth;
   }, [filesWidth]);
+  useEffect(() => {
+    infoHeightRef.current = infoHeight;
+  }, [infoHeight]);
 
   useEffect(() => {
     setFilesWidth(loadFilesListWidth(workspaceId));
+    setInfoHeight(loadCommitInfoHeight(workspaceId));
   }, [workspaceId]);
 
   useEffect(() => {
@@ -114,6 +129,15 @@ export function CommitFilesPane({
     persistFilesListWidth(workspaceId, filesWidthRef.current);
   }, [workspaceId]);
 
+  const onInfoHeightDrag = useCallback((deltaY: number) => {
+    // Handle sits above the info pane; dragging down shrinks files / grows info.
+    setInfoHeight((prev) => clampCommitInfoHeight(prev - deltaY));
+  }, []);
+
+  const onInfoHeightDragEnd = useCallback(() => {
+    persistCommitInfoHeight(workspaceId, infoHeightRef.current);
+  }, [workspaceId]);
+
   if (!commit) {
     return (
       <div className="flex h-full items-center justify-center px-4 text-[12px] text-ink-muted">
@@ -122,94 +146,167 @@ export function CommitFilesPane({
     );
   }
 
-  const title = isUncommittedCommit(commit)
-    ? "Uncommitted changes"
-    : `${commit.shortId} — ${commit.subject}`;
-
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-raised/40">
-      <div className="shrink-0 truncate border-b border-border px-3 py-1.5 text-[11px] font-medium text-ink-muted">
-        {title}
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div
-          className="flex min-h-0 shrink-0 flex-col border-r border-border"
-          style={{ width: filesWidth }}
-        >
-          <div className="min-h-0 flex-1 overflow-auto">
-            {loading ? (
-              <p className="px-3 py-2 text-[12px] text-ink-muted">Loading files…</p>
-            ) : error ? (
-              <p className="px-3 py-2 text-[12px] text-danger">{error}</p>
-            ) : files.length === 0 ? (
-              <p className="px-3 py-2 text-[12px] text-ink-muted">No files changed.</p>
-            ) : (
-              <ul className="py-1 text-[12px]">
-                {files.map((file) => {
-                  const selected = file.path === selectedFile?.path;
-                  return (
-                    <li key={`${file.status}:${file.oldPath ?? ""}:${file.path}`}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedFile(file)}
-                        className={[
-                          "flex w-full items-center gap-2 px-3 py-0.5 text-left",
-                          selected
-                            ? "bg-accent/20"
-                            : "hover:bg-surface-overlay/60",
-                        ].join(" ")}
-                        title={
-                          file.oldPath
-                            ? `${file.oldPath} → ${file.path}`
-                            : file.path
-                        }
-                      >
-                        <span
-                          className={[
-                            "w-4 shrink-0 text-center font-mono text-[11px] font-semibold",
-                            statusClass(file.status),
-                          ].join(" ")}
-                        >
-                          {statusLabel(file.status)}
-                        </span>
-                        <span className="min-w-0 truncate font-mono text-ink">
-                          {file.oldPath ? (
-                            <>
-                              <span className="text-ink-muted">{file.oldPath}</span>
-                              <span className="text-ink-muted"> → </span>
-                              {file.path}
-                            </>
-                          ) : (
-                            file.path
-                          )}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+    <div className="flex h-full min-h-0 bg-surface-raised/40">
+      <div
+        className="flex min-h-0 shrink-0 flex-col border-r border-border"
+        style={{ width: filesWidth }}
+      >
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="sticky top-0 z-[1] border-b border-border bg-surface-raised/95 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted backdrop-blur">
+            Files
           </div>
-        </div>
-
-        <FilesSplitHandle onDrag={onFilesWidthDrag} onDragEnd={onFilesWidthDragEnd} />
-
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          {!selectedFile ? (
-            <div className="flex h-full items-center justify-center px-4 text-[12px] text-ink-muted">
-              Select a file to view its diff.
-            </div>
-          ) : diffLoading ? (
-            <p className="px-3 py-2 text-[12px] text-ink-muted">Loading diff…</p>
-          ) : diffError ? (
-            <p className="px-3 py-2 text-[12px] text-danger">{diffError}</p>
+          {loading ? (
+            <p className="px-3 py-2 text-[12px] text-ink-muted">Loading files…</p>
+          ) : error ? (
+            <p className="px-3 py-2 text-[12px] text-danger">{error}</p>
+          ) : files.length === 0 ? (
+            <p className="px-3 py-2 text-[12px] text-ink-muted">No files changed.</p>
           ) : (
-            <div className="h-full overflow-auto">
-              <DiffView diff={diff} />
-            </div>
+            <ul className="py-1 text-[12px]">
+              {files.map((file) => {
+                const selected = file.path === selectedFile?.path;
+                return (
+                  <li key={`${file.status}:${file.oldPath ?? ""}:${file.path}`}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(file)}
+                      className={[
+                        "flex w-full items-center gap-2 px-3 py-0.5 text-left",
+                        selected
+                          ? "bg-accent/20"
+                          : "hover:bg-surface-overlay/60",
+                      ].join(" ")}
+                      title={
+                        file.oldPath
+                          ? `${file.oldPath} → ${file.path}`
+                          : file.path
+                      }
+                    >
+                      <span
+                        className={[
+                          "w-4 shrink-0 text-center font-mono text-[11px] font-semibold",
+                          statusClass(file.status),
+                        ].join(" ")}
+                      >
+                        {statusLabel(file.status)}
+                      </span>
+                      <span className="min-w-0 truncate font-mono text-ink">
+                        {file.oldPath ? (
+                          <>
+                            <span className="text-ink-muted">{file.oldPath}</span>
+                            <span className="text-ink-muted"> → </span>
+                            {file.path}
+                          </>
+                        ) : (
+                          file.path
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
+
+        <VerticalSplitHandle
+          onDrag={onInfoHeightDrag}
+          onDragEnd={onInfoHeightDragEnd}
+        />
+
+        <div
+          className="shrink-0 overflow-auto border-t border-border bg-surface/40"
+          style={{ height: infoHeight }}
+        >
+          <CommitInfoPanel commit={commit} />
+        </div>
       </div>
+
+      <FilesSplitHandle onDrag={onFilesWidthDrag} onDragEnd={onFilesWidthDragEnd} />
+
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        {!selectedFile ? (
+          <div className="flex h-full items-center justify-center px-4 text-[12px] text-ink-muted">
+            Select a file to view its diff.
+          </div>
+        ) : diffLoading ? (
+          <p className="px-3 py-2 text-[12px] text-ink-muted">Loading diff…</p>
+        ) : diffError ? (
+          <p className="px-3 py-2 text-[12px] text-danger">{diffError}</p>
+        ) : (
+          <div className="h-full overflow-auto">
+            <DiffView diff={diff} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CommitInfoPanel({ commit }: { commit: CommitInfo }) {
+  const uncommitted = isUncommittedCommit(commit);
+
+  return (
+    <div className="space-y-2 px-3 py-2 text-[12px]">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+        Commit
+      </div>
+      <div className="font-medium leading-snug text-ink">
+        {uncommitted ? "Uncommitted changes" : commit.subject}
+      </div>
+      {!uncommitted && (
+        <>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+            <dt className="text-ink-muted">Hash</dt>
+            <dd className="min-w-0 truncate font-mono text-ink" title={commit.id}>
+              {commit.id}
+            </dd>
+            <dt className="text-ink-muted">Author</dt>
+            <dd className="min-w-0 truncate text-ink">{commit.authorName || "—"}</dd>
+            <dt className="text-ink-muted">Date</dt>
+            <dd className="min-w-0 truncate text-ink">
+              {commit.authoredAt ? formatCommitTime(commit.authoredAt) : "—"}
+            </dd>
+            {commit.parents.length > 0 && (
+              <>
+                <dt className="text-ink-muted">
+                  {commit.parents.length === 1 ? "Parent" : "Parents"}
+                </dt>
+                <dd className="min-w-0 font-mono text-ink">
+                  {commit.parents.map((p) => p.slice(0, 7)).join(", ")}
+                </dd>
+              </>
+            )}
+          </dl>
+          {commit.refs.length > 0 && (
+            <div className="flex flex-wrap gap-1 pt-0.5">
+              {commit.refs.map((ref) => (
+                <span
+                  key={ref}
+                  className={[
+                    "rounded px-1 py-px text-[10px] font-medium",
+                    ref === "HEAD"
+                      ? "bg-accent/25 text-accent"
+                      : ref.startsWith("tag:")
+                        ? "bg-warning/20 text-warning"
+                        : ref.includes("/")
+                          ? "bg-surface-overlay text-ink-muted"
+                          : "bg-success/20 text-success",
+                  ].join(" ")}
+                >
+                  {ref}
+                </span>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {uncommitted && (
+        <p className="text-[11px] text-ink-muted">
+          Local working-tree changes that have not been committed yet.
+        </p>
+      )}
     </div>
   );
 }

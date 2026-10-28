@@ -9,8 +9,8 @@ import type {
 } from "../types/models";
 import * as api from "../lib/api";
 import {
+  UNCOMMITTED_COMMIT_ID,
   withUncommittedPseudoCommit,
-  workingTreeIsDirty,
 } from "../lib/commitGraphLayout";
 import {
   clampDetailPaneHeight,
@@ -42,6 +42,8 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
   const [detailHeight, setDetailHeight] = useState(() =>
     loadDetailPaneHeight(workspaceId),
   );
+  /** True only when porcelain reports at least one changed path. */
+  const [hasUncommittedFiles, setHasUncommittedFiles] = useState(false);
   const loadingMoreRef = useRef(false);
   const splitRef = useRef<HTMLDivElement>(null);
   const detailHeightRef = useRef(detailHeight);
@@ -119,10 +121,43 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
     void loadInitial(status.repositoryId);
   }, [status?.repositoryId, status?.available, status?.lastFetchSummary, loadInitial]);
 
-  const dirty = workingTreeIsDirty(status?.workingTree);
+  useEffect(() => {
+    if (!status?.available) {
+      setHasUncommittedFiles(false);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await api.listCommitFiles(
+          status.repositoryId,
+          UNCOMMITTED_COMMIT_ID,
+        );
+        if (!cancelled) setHasUncommittedFiles(list.length > 0);
+      } catch {
+        if (!cancelled) setHasUncommittedFiles(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    status?.available,
+    status?.repositoryId,
+    status?.lastFetchSummary,
+    status?.workingTree?.modified,
+    status?.workingTree?.added,
+    status?.workingTree?.deleted,
+    status?.workingTree?.untracked,
+    status?.workingTree?.renamed,
+    status?.workingTree?.conflicted,
+  ]);
+
   const graphCommits = useMemo(
-    () => withUncommittedPseudoCommit(commits, dirty),
-    [commits, dirty],
+    () => withUncommittedPseudoCommit(commits, hasUncommittedFiles),
+    [commits, hasUncommittedFiles],
   );
 
   useEffect(() => {
@@ -213,10 +248,10 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
             <span
               className={[
                 "text-xs",
-                dirty ? "text-warning" : "text-success",
+                hasUncommittedFiles ? "text-warning" : "text-success",
               ].join(" ")}
             >
-              {dirty ? "Modified" : "Clean"}
+              {hasUncommittedFiles ? "Modified" : "Clean"}
             </span>
           )}
         </div>
