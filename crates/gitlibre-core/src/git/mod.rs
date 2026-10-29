@@ -3,6 +3,7 @@ mod executor;
 mod identity;
 mod log;
 mod show;
+mod stage;
 mod status;
 
 pub use branches::{
@@ -12,8 +13,12 @@ pub use executor::{GitExecutor, GitOutput};
 pub use identity::{read_commit_identity, CommitIdentity};
 pub use log::{list_commits, CommitInfo};
 pub use show::{
-    get_commit_file_diff, get_commit_file_diff_with_old_path, list_commit_files, CommitFileChange,
-    UNCOMMITTED_COMMIT_ID,
+    get_commit_file_diff, get_commit_file_diff_with_old_path, list_commit_files, ChangeArea,
+    CommitFileChange, UNCOMMITTED_COMMIT_ID,
+};
+pub use stage::{
+    commit_index, discard_paths, remove_paths, resolve_repo_path, stage_paths, stop_tracking_paths,
+    unstage_paths,
 };
 pub use status::{
     inspect_repository, parse_porcelain_v2, RemoteInfo, RepoInspection, WorkingTreeStatus,

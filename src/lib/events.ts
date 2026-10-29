@@ -36,3 +36,7 @@ export async function onMenuNewWorkspace(handler: () => void): Promise<UnlistenF
 export async function onMenuAccounts(handler: () => void): Promise<UnlistenFn> {
   return listen("menu-accounts", () => handler());
 }
+
+export async function onMenuSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-settings", () => handler());
+}

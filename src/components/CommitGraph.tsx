@@ -22,7 +22,7 @@ import {
   layoutCommitGraph,
 } from "../lib/commitGraphLayout";
 
-const ROW_H = 28;
+const ROW_H = 22;
 const LANE_W = 14;
 const DOT_R = 4;
 const GRAPH_PAD_X = 10;
@@ -334,7 +334,7 @@ export function CommitGraph({
                   }
                 }}
                 className={[
-                  "grid cursor-pointer items-center border-b border-border/40 text-[12px]",
+                  "grid cursor-pointer items-center text-[12px]",
                   selected
                     ? "bg-accent/20"
                     : uncommitted

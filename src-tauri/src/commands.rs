@@ -5,13 +5,15 @@ use crate::dto::{
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
-    detect_repo_account, detect_repo_account_from_remote, inspect_repository,
-    list_local_branches_for_remote, Account, AccountId, AuthKind, BranchInfo, CoreError, GitAuth,
-    RepositoryId, WorkspaceId,
+    commit_index, detect_repo_account, detect_repo_account_from_remote, discard_paths,
+    inspect_repository, list_local_branches_for_remote, remove_paths, resolve_repo_path,
+    stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId, AuthKind, BranchInfo,
+    ChangeArea, CommitIdentity, CoreError, GitAuth, RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 fn lock_store(
     state: &AppState,
@@ -63,6 +65,52 @@ fn snapshot_from_state(state: &AppState) -> CmdResult<AppSnapshot> {
             .collect(),
         accounts,
     })
+}
+
+fn repo_path(state: &AppState, id: RepositoryId) -> CmdResult<PathBuf> {
+    let store = lock_store(state)?;
+    store
+        .get_repository(id)
+        .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))
+        .map(|r| r.path.clone())
+}
+
+/// Prefer the assigned account's commit name/email when both are set; otherwise None
+/// so Git uses the repo/global identity.
+fn resolve_commit_identity_for_repo(
+    state: &AppState,
+    repo_id: RepositoryId,
+) -> CmdResult<Option<CommitIdentity>> {
+    let store = lock_store(state)?;
+    let repo = store
+        .get_repository(repo_id)
+        .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?;
+    let Some(account_id) = repo.account_id else {
+        return Ok(None);
+    };
+    let account = store
+        .get_account(account_id)
+        .ok_or_else(|| AppErrorDto::from(CoreError::account_not_found()))?;
+    let name = account
+        .commit_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let email = account
+        .commit_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if name.is_none() && email.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(CommitIdentity {
+        name,
+        email,
+        is_local: false,
+    }))
 }
 
 fn resolve_auth_for_repo(state: &AppState, repo_id: RepositoryId) -> CmdResult<Option<GitAuth>> {
@@ -597,16 +645,10 @@ pub async fn get_commit_file_diff(
     commit: String,
     path: String,
     old_path: Option<String>,
+    area: Option<ChangeArea>,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
-    let repo_path = {
-        let store = lock_store(&state)?;
-        store
-            .get_repository(id)
-            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
-            .path
-            .clone()
-    };
+    let repo_path = repo_path(&state, id)?;
     if !repo_path.exists() {
         return Ok(String::new());
     }
@@ -616,9 +658,199 @@ pub async fn get_commit_file_diff(
         commit.trim(),
         path.trim(),
         old_path.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        area,
     )
     .await
     .map_err(AppErrorDto::from)
+}
+
+#[tauri::command(rename = "stage_paths")]
+pub async fn stage_repository_paths(
+    id: RepositoryId,
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            let paths = paths.clone();
+            async move {
+                stage_paths(&executor, &path, &paths)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command(rename = "unstage_paths")]
+pub async fn unstage_repository_paths(
+    id: RepositoryId,
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            let paths = paths.clone();
+            async move {
+                unstage_paths(&executor, &path, &paths)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command(rename = "discard_paths")]
+pub async fn discard_repository_paths(
+    id: RepositoryId,
+    paths: Vec<String>,
+    area: ChangeArea,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            let paths = paths.clone();
+            async move {
+                discard_paths(&executor, &path, &paths, area)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command(rename = "remove_paths")]
+pub async fn remove_repository_paths(
+    id: RepositoryId,
+    paths: Vec<String>,
+    area: ChangeArea,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            let paths = paths.clone();
+            async move {
+                remove_paths(&executor, &path, &paths, area)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command(rename = "stop_tracking_paths")]
+pub async fn stop_tracking_repository_paths(
+    id: RepositoryId,
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            let paths = paths.clone();
+            async move {
+                stop_tracking_paths(&executor, &path, &paths)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command]
+pub fn resolve_repository_file_path(
+    id: RepositoryId,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let repo = repo_path(&state, id)?;
+    let abs = resolve_repo_path(&repo, &path).map_err(AppErrorDto::from)?;
+    Ok(abs.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn open_repository_file(
+    id: RepositoryId,
+    path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let repo = repo_path(&state, id)?;
+    let abs = resolve_repo_path(&repo, &path).map_err(AppErrorDto::from)?;
+    if !abs.exists() {
+        return Err(AppErrorDto::from(CoreError::path_not_found(
+            abs.display(),
+        )));
+    }
+    app.opener()
+        .open_path(abs.to_string_lossy(), None::<&str>)
+        .map_err(|err| AppErrorDto {
+            code: "process_failed".into(),
+            message: format!("Failed to open file: {err}"),
+        })
+}
+
+#[tauri::command]
+pub fn reveal_repository_file(
+    id: RepositoryId,
+    path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let repo = repo_path(&state, id)?;
+    let abs = resolve_repo_path(&repo, &path).map_err(AppErrorDto::from)?;
+    if !abs.exists() {
+        return Err(AppErrorDto::from(CoreError::path_not_found(
+            abs.display(),
+        )));
+    }
+    app.opener().reveal_item_in_dir(&abs).map_err(|err| AppErrorDto {
+        code: "process_failed".into(),
+        message: format!("Failed to reveal file: {err}"),
+    })
+}
+
+#[tauri::command]
+pub async fn commit_repository(
+    id: RepositoryId,
+    message: String,
+    amend: Option<bool>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let path = repo_path(&state, id)?;
+    let identity = resolve_commit_identity_for_repo(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    let amend = amend.unwrap_or(false);
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move {
+                commit_index(&executor, &path, &message, amend, identity.as_ref())
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
 }
 
 #[tauri::command]

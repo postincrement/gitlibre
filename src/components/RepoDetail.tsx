@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import type {
   BranchInfo,
   CommitFileChange,
@@ -10,6 +9,7 @@ import type {
 import * as api from "../lib/api";
 import {
   UNCOMMITTED_COMMIT_ID,
+  isUncommittedCommit,
   withUncommittedPseudoCommit,
 } from "../lib/commitGraphLayout";
 import {
@@ -27,9 +27,16 @@ interface RepoDetailProps {
   workspaceId: WorkspaceId;
   status: RepoStatus | null;
   branches: BranchInfo[];
+  /** Refresh status (and sidebar dirty indicators) after local mutations. */
+  onWorkingTreeChanged?: () => void;
 }
 
-export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
+export function RepoDetail({
+  workspaceId,
+  status,
+  branches,
+  onWorkingTreeChanged,
+}: RepoDetailProps) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -161,7 +168,9 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
   );
 
   useEffect(() => {
-    if (!selectedCommit) return;
+    // Only auto-clear the synthetic uncommitted row when it disappears from the graph.
+    // Real commits (e.g. parent links outside the loaded page) may stay selected.
+    if (!selectedCommit || !isUncommittedCommit(selectedCommit)) return;
     if (graphCommits.some((c) => c.id === selectedCommit.id)) return;
     setSelectedCommit(null);
     setFiles([]);
@@ -226,6 +235,60 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
     persistDetailPaneHeight(workspaceId, detailHeightRef.current);
   }, [workspaceId]);
 
+  const refreshWorkingTree = useCallback(async () => {
+    if (!status?.available) return;
+    try {
+      const list = await api.listCommitFiles(
+        status.repositoryId,
+        UNCOMMITTED_COMMIT_ID,
+      );
+      setHasUncommittedFiles(list.length > 0);
+      if (selectedCommit?.id === UNCOMMITTED_COMMIT_ID) {
+        setFiles(list);
+      }
+    } catch {
+      /* parent status refresh will recover */
+    }
+    onWorkingTreeChanged?.();
+  }, [
+    status?.available,
+    status?.repositoryId,
+    selectedCommit?.id,
+    onWorkingTreeChanged,
+  ]);
+
+  const refreshAfterCommit = useCallback(async () => {
+    if (!status?.available) return;
+    await loadInitial(status.repositoryId);
+    setSelectedCommit(null);
+    setFiles([]);
+    await refreshWorkingTree();
+  }, [status?.available, status?.repositoryId, loadInitial, refreshWorkingTree]);
+
+  const selectCommitById = useCallback(
+    (commitId: string) => {
+      const found = graphCommits.find(
+        (c) => c.id === commitId || c.id.startsWith(commitId),
+      );
+      if (found) {
+        setSelectedCommit(found);
+        return;
+      }
+      // Parent may be outside the loaded page — still open it by id.
+      setSelectedCommit({
+        id: commitId,
+        shortId: commitId.slice(0, 7),
+        parents: [],
+        subject: commitId.slice(0, 7),
+        authorName: "",
+        authorEmail: "",
+        authoredAt: "",
+        refs: [],
+      });
+    },
+    [graphCommits],
+  );
+
   if (!status) {
     return (
       <main className="flex flex-1 items-center justify-center p-8 text-ink-muted">
@@ -234,89 +297,52 @@ export function RepoDetail({ workspaceId, status, branches }: RepoDetailProps) {
     );
   }
 
+  if (!status.available) {
+    return (
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+        <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {status.lastError ?? "Repository is unavailable on disk."}
+        </div>
+        <p className="mt-3 text-sm text-ink-muted">Commit history unavailable.</p>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border px-4 py-3">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-base font-semibold tracking-tight">{status.displayName}</h1>
-          <span className="font-mono text-xs text-ink-muted">
-            {status.detachedHead
-              ? "detached HEAD"
-              : (status.currentBranch ?? "—")}
-          </span>
-          {status.available && (
-            <span
-              className={[
-                "text-xs",
-                hasUncommittedFiles ? "text-warning" : "text-success",
-              ].join(" ")}
-            >
-              {hasUncommittedFiles ? "Modified" : "Clean"}
-            </span>
-          )}
+      <div ref={splitRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <CommitGraph
+            workspaceId={workspaceId}
+            commits={graphCommits}
+            branches={branches}
+            selectedCommitId={selectedCommit?.id ?? null}
+            loading={loading}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+            error={error}
+            onLoadMore={loadMore}
+            onSelectCommit={setSelectedCommit}
+          />
         </div>
-        <p className="mt-0.5 truncate font-mono text-[11px] text-ink-muted" title={status.path}>
-          {status.path}
-        </p>
-        {!status.available && (
-          <Banner tone="danger">
-            {status.lastError ?? "Repository is unavailable on disk."}
-          </Banner>
-        )}
+        <VerticalSplitHandle onDrag={onSplitDrag} onDragEnd={onSplitDragEnd} />
+        <div
+          className="shrink-0 overflow-hidden border-t border-border"
+          style={{ height: detailHeight }}
+        >
+          <CommitFilesPane
+            workspaceId={workspaceId}
+            repositoryId={status.repositoryId}
+            commit={selectedCommit}
+            files={files}
+            loading={filesLoading}
+            error={filesError}
+            onWorkingTreeChanged={() => void refreshWorkingTree()}
+            onCommitted={() => void refreshAfterCommit()}
+            onSelectCommitId={selectCommitById}
+          />
+        </div>
       </div>
-
-      {status.available ? (
-        <div ref={splitRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <CommitGraph
-              workspaceId={workspaceId}
-              commits={graphCommits}
-              branches={branches}
-              selectedCommitId={selectedCommit?.id ?? null}
-              loading={loading}
-              loadingMore={loadingMore}
-              hasMore={hasMore}
-              error={error}
-              onLoadMore={loadMore}
-              onSelectCommit={setSelectedCommit}
-            />
-          </div>
-          <VerticalSplitHandle onDrag={onSplitDrag} onDragEnd={onSplitDragEnd} />
-          <div className="shrink-0 overflow-hidden border-t border-border" style={{ height: detailHeight }}>
-            <CommitFilesPane
-              workspaceId={workspaceId}
-              repositoryId={status.repositoryId}
-              commit={selectedCommit}
-              files={files}
-              loading={filesLoading}
-              error={filesError}
-            />
-          </div>
-        </div>
-      ) : (
-        <p className="p-4 text-sm text-ink-muted">Commit history unavailable.</p>
-      )}
     </main>
-  );
-}
-
-function Banner({
-  children,
-  tone,
-}: {
-  children: ReactNode;
-  tone: "danger" | "warning";
-}) {
-  return (
-    <div
-      className={[
-        "mt-2 rounded-md border px-3 py-2 text-sm",
-        tone === "danger"
-          ? "border-danger/40 bg-danger/10 text-danger"
-          : "border-warning/40 bg-warning/10 text-warning",
-      ].join(" ")}
-    >
-      {children}
-    </div>
   );
 }

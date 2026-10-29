@@ -79,6 +79,17 @@ impl FetchCoordinator {
         &self.executor
     }
 
+    /// Run `f` while holding the per-repo mutex (same gate as fetch).
+    pub async fn with_repo_lock<F, Fut, T>(&self, repo_path: &Path, f: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        let gate = self.locks.lock_for(repo_path).await;
+        let _guard = gate.lock().await;
+        f().await
+    }
+
     pub async fn fetch_one<F>(
         &self,
         repository_id: RepositoryId,

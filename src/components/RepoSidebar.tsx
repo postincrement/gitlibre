@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BranchInfo, RepositoryId, RepoStatus } from "../types/models";
+import type {
+  BranchInfo,
+  RepositoryId,
+  RepoStatus,
+  WorkspaceId,
+} from "../types/models";
 import * as api from "../lib/api";
+import {
+  clampRepoListHeight,
+  loadRepoListHeight,
+  persistRepoListHeight,
+} from "../lib/workspaceLayout";
+import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
 interface RepoSidebarProps {
+  workspaceId: WorkspaceId;
   statuses: RepoStatus[];
   selectedId: RepositoryId | null;
   branches: BranchInfo[];
@@ -25,6 +37,7 @@ type BranchTreeNode =
   | { kind: "branch"; name: string; fullName: string };
 
 export function RepoSidebar({
+  workspaceId,
   statuses,
   selectedId,
   branches,
@@ -41,8 +54,49 @@ export function RepoSidebar({
   const [remoteBranchesLoading, setRemoteBranchesLoading] = useState(false);
   const [remoteBranchesError, setRemoteBranchesError] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [repoListHeight, setRepoListHeight] = useState(() =>
+    loadRepoListHeight(workspaceId),
+  );
+  const sidebarBodyRef = useRef<HTMLDivElement>(null);
+  const selectedRepoItemRef = useRef<HTMLLIElement | null>(null);
+  const repoListHeightRef = useRef(repoListHeight);
+  const workspaceIdRef = useRef(workspaceId);
   const selected = statuses.find((s) => s.repositoryId === selectedId) ?? null;
   const asideStyle = { width, minWidth: width, maxWidth: width };
+
+  useEffect(() => {
+    workspaceIdRef.current = workspaceId;
+    setRepoListHeight(loadRepoListHeight(workspaceId));
+  }, [workspaceId]);
+
+  useEffect(() => {
+    repoListHeightRef.current = repoListHeight;
+  }, [repoListHeight]);
+
+  const scrollSelectedRepoIntoView = useCallback(() => {
+    const item = selectedRepoItemRef.current;
+    if (!item) return;
+    item.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, []);
+
+  useEffect(() => {
+    scrollSelectedRepoIntoView();
+  }, [repoListHeight, selectedId, scrollSelectedRepoIntoView]);
+
+  const onRepoListDrag = useCallback(
+    (deltaY: number) => {
+      const container = sidebarBodyRef.current?.clientHeight ?? 0;
+      setRepoListHeight((prev) => clampRepoListHeight(prev + deltaY, container));
+      // Keep the selection visible while the list shrinks during drag.
+      requestAnimationFrame(() => scrollSelectedRepoIntoView());
+    },
+    [scrollSelectedRepoIntoView],
+  );
+
+  const onRepoListDragEnd = useCallback(() => {
+    persistRepoListHeight(workspaceIdRef.current, repoListHeightRef.current);
+    scrollSelectedRepoIntoView();
+  }, [scrollSelectedRepoIntoView]);
 
   useEffect(() => {
     setExpandedRemote(null);
@@ -139,7 +193,10 @@ export function RepoSidebar({
       className="relative flex shrink-0 flex-col bg-surface-raised/60 text-[12px]"
       style={asideStyle}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        ref={sidebarBodyRef}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2.5 py-1.5">
           <div className="min-w-0 flex-1 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
             Repositories ({statuses.length})
@@ -155,7 +212,10 @@ export function RepoSidebar({
             +
           </button>
         </div>
-        <ul className="max-h-[40%] shrink-0 overflow-y-auto p-1.5">
+        <ul
+          className="shrink-0 overflow-y-auto p-1.5"
+          style={{ height: repoListHeight }}
+        >
           {statuses.map((repo) => {
             const isSelected = repo.repositoryId === selectedId;
             const dirtyCount = repo.workingTree
@@ -169,7 +229,12 @@ export function RepoSidebar({
             const clean = repo.available && dirtyCount === 0;
 
             return (
-              <li key={repo.repositoryId}>
+              <li
+                key={repo.repositoryId}
+                ref={(el) => {
+                  if (isSelected) selectedRepoItemRef.current = el;
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => onSelect(repo.repositoryId)}
@@ -235,6 +300,12 @@ export function RepoSidebar({
             );
           })}
         </ul>
+
+        <VerticalSplitHandle
+          label="Resize repositories list"
+          onDrag={onRepoListDrag}
+          onDragEnd={onRepoListDragEnd}
+        />
 
         <div className="flex max-h-[35%] shrink-0 flex-col border-t border-border">
           <div className="shrink-0 border-b border-border px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted">

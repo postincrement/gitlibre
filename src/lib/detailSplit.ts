@@ -133,3 +133,54 @@ export function persistCommitInfoHeight(workspaceId: WorkspaceId, height: number
 export function clampCommitInfoHeight(height: number): number {
   return clamp(height, MIN_COMMIT_INFO_HEIGHT, MAX_COMMIT_INFO_HEIGHT);
 }
+
+const STAGED_FILES_HEIGHT_KEY = "gitlibre.stagedFilesPaneHeight.byWorkspace";
+
+export const DEFAULT_STAGED_FILES_HEIGHT = 160;
+export const MIN_STAGED_FILES_HEIGHT = 72;
+export const MIN_UNSTAGED_FILES_HEIGHT = 72;
+
+function readStagedHeights(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(STAGED_FILES_HEIGHT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+export function loadStagedFilesPaneHeight(
+  workspaceId: WorkspaceId,
+  fallback = DEFAULT_STAGED_FILES_HEIGHT,
+): number {
+  const value = readStagedHeights()[workspaceId];
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(MIN_STAGED_FILES_HEIGHT, value);
+}
+
+export function persistStagedFilesPaneHeight(
+  workspaceId: WorkspaceId,
+  height: number,
+): void {
+  try {
+    const all = readStagedHeights();
+    all[workspaceId] = Math.max(MIN_STAGED_FILES_HEIGHT, height);
+    localStorage.setItem(STAGED_FILES_HEIGHT_KEY, JSON.stringify(all));
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
+
+export function clampStagedFilesPaneHeight(
+  height: number,
+  containerHeight: number,
+): number {
+  const max = Math.max(
+    MIN_STAGED_FILES_HEIGHT,
+    containerHeight - MIN_UNSTAGED_FILES_HEIGHT,
+  );
+  return clamp(height, MIN_STAGED_FILES_HEIGHT, max);
+}

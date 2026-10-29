@@ -1,11 +1,15 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  ChangeArea,
   CommitFileChange,
   CommitInfo,
   RepositoryId,
@@ -19,13 +23,47 @@ import {
 import {
   clampCommitInfoHeight,
   clampFilesListWidth,
+  clampStagedFilesPaneHeight,
   loadCommitInfoHeight,
   loadFilesListWidth,
+  loadStagedFilesPaneHeight,
   persistCommitInfoHeight,
   persistFilesListWidth,
+  persistStagedFilesPaneHeight,
 } from "../lib/detailSplit";
+import {
+  loadSeparateUntrackedList,
+  UI_SETTINGS_CHANGED_EVENT,
+} from "../lib/uiSettings";
 import { DiffView } from "./DiffView";
 import { VerticalSplitHandle } from "./VerticalSplitHandle";
+
+interface FileMenuState {
+  x: number;
+  y: number;
+  files: CommitFileChange[];
+  /** Working-tree mutations (stage / remove / …) only apply here. */
+  allowMutations: boolean;
+}
+
+type PendingFileAction =
+  | { kind: "remove"; files: CommitFileChange[] }
+  | { kind: "stopTracking"; files: CommitFileChange[] };
+
+function revealInFolderLabel(): string {
+  const ua = navigator.userAgent;
+  if (/Mac|iPhone|iPad|iPod/i.test(ua)) return "Show in Finder";
+  if (/Windows/i.test(ua)) return "Show in Explorer";
+  return "Show in File Manager";
+}
+
+function fileKey(file: CommitFileChange): string {
+  return `${file.area ?? ""}:${file.status}:${file.oldPath ?? ""}:${file.path}`;
+}
+
+function sameFile(a: CommitFileChange, b: CommitFileChange): boolean {
+  return fileKey(a) === fileKey(b);
+}
 
 interface CommitFilesPaneProps {
   workspaceId: WorkspaceId;
@@ -34,6 +72,12 @@ interface CommitFilesPaneProps {
   files: CommitFileChange[];
   loading: boolean;
   error: string | null;
+  /** Called after stage / unstage / discard / commit so the parent can refresh. */
+  onWorkingTreeChanged?: () => void;
+  /** Called after a successful commit (history should reload). */
+  onCommitted?: () => void;
+  /** Select another commit (e.g. parent hash link). */
+  onSelectCommitId?: (commitId: string) => void;
 }
 
 export function CommitFilesPane({
@@ -43,19 +87,94 @@ export function CommitFilesPane({
   files,
   loading,
   error,
+  onWorkingTreeChanged,
+  onCommitted,
+  onSelectCommitId,
 }: CommitFilesPaneProps) {
-  const [selectedFile, setSelectedFile] = useState<CommitFileChange | null>(null);
+  /** All selected file rows (multi-select). */
+  const [selection, setSelection] = useState<CommitFileChange[]>([]);
+  /** File whose diff is shown (last interacted). */
+  const [activeFile, setActiveFile] = useState<CommitFileChange | null>(null);
   const [diff, setDiff] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [amend, setAmend] = useState(false);
+  const [pendingDiscard, setPendingDiscard] = useState<CommitFileChange | null>(
+    null,
+  );
+  const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null);
+  const [pendingFileAction, setPendingFileAction] =
+    useState<PendingFileAction | null>(null);
   const [filesWidth, setFilesWidth] = useState(() =>
     loadFilesListWidth(workspaceId),
   );
   const [infoHeight, setInfoHeight] = useState(() =>
     loadCommitInfoHeight(workspaceId),
   );
+  const [stagedPaneHeight, setStagedPaneHeight] = useState(() =>
+    loadStagedFilesPaneHeight(workspaceId),
+  );
   const filesWidthRef = useRef(filesWidth);
   const infoHeightRef = useRef(infoHeight);
+  const stagedPaneHeightRef = useRef(stagedPaneHeight);
+  const stagedSplitRef = useRef<HTMLDivElement>(null);
+  const selectionAnchorRef = useRef<CommitFileChange | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
+  const uncommitted = commit ? isUncommittedCommit(commit) : false;
+  const [separateUntracked, setSeparateUntracked] = useState(() =>
+    loadSeparateUntrackedList(),
+  );
+
+  useEffect(() => {
+    const sync = () => setSeparateUntracked(loadSeparateUntrackedList());
+    window.addEventListener(UI_SETTINGS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(UI_SETTINGS_CHANGED_EVENT, sync);
+  }, []);
+
+  const staged = useMemo(
+    () => files.filter((f) => f.area === "staged").sort(compareByDirThenName),
+    [files],
+  );
+  const unstagedOnly = useMemo(
+    () => files.filter((f) => f.area === "unstaged").sort(compareByDirThenName),
+    [files],
+  );
+  const untracked = useMemo(
+    () => files.filter((f) => f.area === "untracked").sort(compareByDirThenName),
+    [files],
+  );
+  const unstaged = useMemo(() => {
+    if (separateUntracked) return unstagedOnly;
+    return [...unstagedOnly, ...untracked].sort(compareByDirThenName);
+  }, [separateUntracked, unstagedOnly, untracked]);
+
+  const selectableFiles = useMemo(() => {
+    if (!commit) return [];
+    if (isUncommittedCommit(commit)) {
+      return separateUntracked
+        ? [...staged, ...unstagedOnly, ...untracked]
+        : [...staged, ...unstaged];
+    }
+    return files;
+  }, [
+    commit,
+    files,
+    separateUntracked,
+    staged,
+    unstaged,
+    unstagedOnly,
+    untracked,
+  ]);
+
+  const selectedKeys = useMemo(
+    () => new Set(selection.map(fileKey)),
+    [selection],
+  );
 
   useEffect(() => {
     filesWidthRef.current = filesWidth;
@@ -63,28 +182,60 @@ export function CommitFilesPane({
   useEffect(() => {
     infoHeightRef.current = infoHeight;
   }, [infoHeight]);
+  useEffect(() => {
+    stagedPaneHeightRef.current = stagedPaneHeight;
+  }, [stagedPaneHeight]);
 
   useEffect(() => {
     setFilesWidth(loadFilesListWidth(workspaceId));
     setInfoHeight(loadCommitInfoHeight(workspaceId));
+    setStagedPaneHeight(loadStagedFilesPaneHeight(workspaceId));
   }, [workspaceId]);
 
   useEffect(() => {
-    setSelectedFile(null);
+    setSelection([]);
+    setActiveFile(null);
+    selectionAnchorRef.current = null;
     setDiff("");
     setDiffError(null);
+    setActionError(null);
+    setPendingDiscard(null);
+    setFileMenu(null);
+    setPendingFileAction(null);
+    if (!commit || !isUncommittedCommit(commit)) {
+      setMessage("");
+      setAmend(false);
+    }
   }, [commit?.id]);
 
   useEffect(() => {
-    if (!selectedFile) return;
-    if (files.some((f) => f.path === selectedFile.path)) return;
-    setSelectedFile(null);
-    setDiff("");
-    setDiffError(null);
-  }, [files, selectedFile]);
+    const nextSelection = selection
+      .map((selected) => files.find((f) => sameFile(f, selected)))
+      .filter((f): f is CommitFileChange => f != null);
+    if (
+      nextSelection.length !== selection.length ||
+      nextSelection.some((f, i) => !sameFile(f, selection[i]!))
+    ) {
+      setSelection(nextSelection);
+    }
+    if (activeFile) {
+      const still = files.find((f) => sameFile(f, activeFile)) ?? null;
+      if (!still) {
+        setActiveFile(nextSelection[nextSelection.length - 1] ?? null);
+        if (nextSelection.length === 0) {
+          setDiff("");
+          setDiffError(null);
+        }
+      } else if (!sameFile(still, activeFile)) {
+        setActiveFile(still);
+      }
+    }
+    // Only re-sync when the file list changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selection/activeFile updated intentionally from files
+  }, [files]);
 
   useEffect(() => {
-    if (!commit || !selectedFile) {
+    if (!commit || !activeFile) {
       setDiff("");
       setDiffError(null);
       setDiffLoading(false);
@@ -100,8 +251,9 @@ export function CommitFilesPane({
         const text = await api.getCommitFileDiff(
           repositoryId,
           commit.id,
-          selectedFile.path,
-          selectedFile.oldPath,
+          activeFile.path,
+          activeFile.oldPath,
+          activeFile.area ?? null,
         );
         if (!cancelled) {
           setDiff(text);
@@ -119,7 +271,28 @@ export function CommitFilesPane({
     return () => {
       cancelled = true;
     };
-  }, [commit, repositoryId, selectedFile]);
+  }, [commit, repositoryId, activeFile]);
+
+  const runMutation = useCallback(
+    async (fn: () => Promise<void>, opts?: { committed?: boolean }) => {
+      try {
+        setBusy(true);
+        setActionError(null);
+        await fn();
+        onWorkingTreeChanged?.();
+        if (opts?.committed) {
+          setMessage("");
+          setAmend(false);
+          onCommitted?.();
+        }
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onWorkingTreeChanged, onCommitted],
+  );
 
   const onFilesWidthDrag = useCallback((deltaX: number) => {
     setFilesWidth((prev) => clampFilesListWidth(prev + deltaX));
@@ -130,13 +303,165 @@ export function CommitFilesPane({
   }, [workspaceId]);
 
   const onInfoHeightDrag = useCallback((deltaY: number) => {
-    // Handle sits above the info pane; dragging down shrinks files / grows info.
     setInfoHeight((prev) => clampCommitInfoHeight(prev - deltaY));
   }, []);
 
   const onInfoHeightDragEnd = useCallback(() => {
     persistCommitInfoHeight(workspaceId, infoHeightRef.current);
   }, [workspaceId]);
+
+  const onStagedPaneDrag = useCallback((deltaY: number) => {
+    const container = stagedSplitRef.current?.clientHeight ?? 0;
+    setStagedPaneHeight((prev) =>
+      clampStagedFilesPaneHeight(prev + deltaY, container),
+    );
+  }, []);
+
+  const onStagedPaneDragEnd = useCallback(() => {
+    persistStagedFilesPaneHeight(workspaceId, stagedPaneHeightRef.current);
+  }, [workspaceId]);
+
+  async function handleCommit(e: FormEvent) {
+    e.preventDefault();
+    if (!message.trim() && !amend) return;
+    if (!amend && staged.length === 0) return;
+    await runMutation(
+      async () => {
+        await api.commitRepository(repositoryId, message, amend);
+      },
+      { committed: true },
+    );
+  }
+
+  const selectFile = useCallback(
+    (file: CommitFileChange, e: ReactMouseEvent) => {
+      const ordered = selectableFiles;
+      if (e.shiftKey && selectionAnchorRef.current) {
+        const anchor = selectionAnchorRef.current;
+        const a = ordered.findIndex((f) => sameFile(f, anchor));
+        const b = ordered.findIndex((f) => sameFile(f, file));
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          setSelection(ordered.slice(lo, hi + 1));
+          setActiveFile(file);
+          return;
+        }
+      }
+
+      if (e.metaKey || e.ctrlKey) {
+        setSelection((prev) => {
+          const exists = prev.some((f) => sameFile(f, file));
+          if (exists) {
+            const next = prev.filter((f) => !sameFile(f, file));
+            setActiveFile(next[next.length - 1] ?? null);
+            return next;
+          }
+          setActiveFile(file);
+          return [...prev, file];
+        });
+        selectionAnchorRef.current = file;
+        return;
+      }
+
+      setSelection([file]);
+      setActiveFile(file);
+      selectionAnchorRef.current = file;
+    },
+    [selectableFiles],
+  );
+
+  const openFileMenu = useCallback(
+    (
+      e: ReactMouseEvent,
+      file: CommitFileChange,
+      allowMutations: boolean,
+    ) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const current = selectionRef.current;
+      const alreadySelected = current.some((f) => sameFile(f, file));
+      const menuFiles =
+        alreadySelected && current.length > 0 ? current : [file];
+      if (!alreadySelected || current.length === 0) {
+        setSelection([file]);
+        selectionAnchorRef.current = file;
+      }
+      setActiveFile(file);
+      setFileMenu({
+        x: e.clientX,
+        y: e.clientY,
+        files: menuFiles,
+        allowMutations,
+      });
+    },
+    [],
+  );
+
+  async function handleOpenFiles(targets: CommitFileChange[]) {
+    try {
+      setActionError(null);
+      for (const file of targets) {
+        await api.openRepositoryFile(repositoryId, file.path);
+      }
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleRevealFile(file: CommitFileChange) {
+    try {
+      setActionError(null);
+      await api.revealRepositoryFile(repositoryId, file.path);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleCopyPaths(targets: CommitFileChange[]) {
+    try {
+      setActionError(null);
+      const paths: string[] = [];
+      for (const file of targets) {
+        paths.push(await api.resolveRepositoryFilePath(repositoryId, file.path));
+      }
+      await navigator.clipboard.writeText(paths.join("\n"));
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function stageSelected(targets: CommitFileChange[]) {
+    const paths = targets.map((f) => f.path);
+    await runMutation(() => api.stagePaths(repositoryId, paths));
+  }
+
+  async function unstageSelected(targets: CommitFileChange[]) {
+    const paths = targets.map((f) => f.path);
+    await runMutation(() => api.unstagePaths(repositoryId, paths));
+  }
+
+  async function removeSelected(targets: CommitFileChange[]) {
+    await runMutation(async () => {
+      const byArea = new Map<ChangeArea, string[]>();
+      for (const file of targets) {
+        if (!file.area) continue;
+        const list = byArea.get(file.area) ?? [];
+        list.push(file.path);
+        byArea.set(file.area, list);
+      }
+      for (const [area, paths] of byArea) {
+        await api.removePaths(repositoryId, paths, area);
+      }
+    });
+  }
+
+  async function stopTrackingSelected(targets: CommitFileChange[]) {
+    const paths = targets
+      .filter((f) => f.area !== "untracked")
+      .map((f) => f.path);
+    if (paths.length === 0) return;
+    await runMutation(() => api.stopTrackingPaths(repositoryId, paths));
+  }
 
   if (!commit) {
     return (
@@ -152,25 +477,150 @@ export function CommitFilesPane({
         className="flex min-h-0 shrink-0 flex-col border-r border-border"
         style={{ width: filesWidth }}
       >
-        <div className="min-h-0 flex-1 overflow-auto">
-          <div className="sticky top-0 z-[1] border-b border-border bg-surface-raised/95 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted backdrop-blur">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-border bg-surface-raised/95 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
             Files
           </div>
+          {actionError && (
+            <p className="shrink-0 border-b border-border/60 px-3 py-1.5 text-[11px] text-danger">
+              {actionError}
+            </p>
+          )}
           {loading ? (
             <p className="px-3 py-2 text-[12px] text-ink-muted">Loading files…</p>
           ) : error ? (
             <p className="px-3 py-2 text-[12px] text-danger">{error}</p>
           ) : files.length === 0 ? (
             <p className="px-3 py-2 text-[12px] text-ink-muted">No files changed.</p>
+          ) : uncommitted ? (
+            <div
+              ref={stagedSplitRef}
+              className="flex min-h-0 flex-1 flex-col text-[12px]"
+            >
+              <div
+                className="min-h-0 shrink-0 overflow-auto"
+                style={{ height: stagedPaneHeight }}
+              >
+                <FileSection
+                  title="Staged"
+                  files={staged}
+                  selectedKeys={selectedKeys}
+                  busy={busy}
+                  emptyHint="No staged files"
+                  stagedChecked
+                  onSelect={selectFile}
+                  onContextMenu={(e, file) => openFileMenu(e, file, true)}
+                  onToggleStaged={(file, checked) => {
+                    if (checked) return;
+                    void runMutation(() =>
+                      api.unstagePaths(repositoryId, [file.path]),
+                    );
+                  }}
+                  bulkAction={
+                    staged.length > 0
+                      ? {
+                          label: "Unstage all",
+                          onClick: () =>
+                            void runMutation(() =>
+                              api.unstagePaths(
+                                repositoryId,
+                                staged.map((f) => f.path),
+                              ),
+                            ),
+                        }
+                      : undefined
+                  }
+                  discardAction={{
+                    onClick: (file) => setPendingDiscard(file),
+                  }}
+                />
+              </div>
+              <VerticalSplitHandle
+                label="Resize staged / unstaged files"
+                onDrag={onStagedPaneDrag}
+                onDragEnd={onStagedPaneDragEnd}
+              />
+              <div className="min-h-0 flex-1 overflow-auto">
+                <FileSection
+                  title="Unstaged"
+                  files={unstaged}
+                  selectedKeys={selectedKeys}
+                  busy={busy}
+                  emptyHint="No unstaged changes"
+                  stagedChecked={false}
+                  onSelect={selectFile}
+                  onContextMenu={(e, file) => openFileMenu(e, file, true)}
+                  onToggleStaged={(file, checked) => {
+                    if (!checked) return;
+                    void runMutation(() =>
+                      api.stagePaths(repositoryId, [file.path]),
+                    );
+                  }}
+                  bulkAction={
+                    unstaged.length > 0
+                      ? {
+                          label: "Stage all",
+                          onClick: () =>
+                            void runMutation(() =>
+                              api.stagePaths(
+                                repositoryId,
+                                unstaged.map((f) => f.path),
+                              ),
+                            ),
+                        }
+                      : undefined
+                  }
+                  discardAction={{
+                    onClick: (file) => setPendingDiscard(file),
+                  }}
+                />
+                {separateUntracked && (
+                  <FileSection
+                    title="Untracked"
+                    files={untracked}
+                    selectedKeys={selectedKeys}
+                    busy={busy}
+                    emptyHint="No untracked files"
+                    stagedChecked={false}
+                    onSelect={selectFile}
+                    onContextMenu={(e, file) => openFileMenu(e, file, true)}
+                    onToggleStaged={(file, checked) => {
+                      if (!checked) return;
+                      void runMutation(() =>
+                        api.stagePaths(repositoryId, [file.path]),
+                      );
+                    }}
+                    bulkAction={
+                      untracked.length > 0
+                        ? {
+                            label: "Stage all",
+                            onClick: () =>
+                              void runMutation(() =>
+                                api.stagePaths(
+                                  repositoryId,
+                                  untracked.map((f) => f.path),
+                                ),
+                              ),
+                          }
+                        : undefined
+                    }
+                    discardAction={{
+                      onClick: (file) => setPendingDiscard(file),
+                    }}
+                  />
+                )}
+              </div>
+            </div>
           ) : (
-            <ul className="py-1 text-[12px]">
+            <ul className="min-h-0 flex-1 overflow-auto py-1 text-[12px]">
               {files.map((file) => {
-                const selected = file.path === selectedFile?.path;
+                const selected = selectedKeys.has(fileKey(file));
                 return (
                   <li key={`${file.status}:${file.oldPath ?? ""}:${file.path}`}>
                     <button
                       type="button"
-                      onClick={() => setSelectedFile(file)}
+                      onClick={(e) => selectFile(file, e)}
+                      onContextMenu={(e) => openFileMenu(e, file, false)}
                       className={[
                         "flex w-full items-center gap-2 px-3 py-0.5 text-left",
                         selected
@@ -183,15 +633,8 @@ export function CommitFilesPane({
                           : file.path
                       }
                     >
-                      <span
-                        className={[
-                          "w-4 shrink-0 text-center font-mono text-[11px] font-semibold",
-                          statusClass(file.status),
-                        ].join(" ")}
-                      >
-                        {statusLabel(file.status)}
-                      </span>
-                      <span className="min-w-0 truncate font-mono text-ink">
+                      <StatusBadge status={file.status} uncommitted={false} />
+                      <span className="font-filename min-w-0 truncate text-ink">
                         {file.oldPath ? (
                           <>
                             <span className="text-ink-muted">{file.oldPath}</span>
@@ -219,14 +662,28 @@ export function CommitFilesPane({
           className="shrink-0 overflow-auto border-t border-border bg-surface/40"
           style={{ height: infoHeight }}
         >
-          <CommitInfoPanel commit={commit} />
+          {uncommitted ? (
+            <CommitForm
+              message={message}
+              amend={amend}
+              busy={busy}
+              canCommit={staged.length > 0 || amend}
+              stagedCount={staged.length}
+              actionError={actionError}
+              onMessageChange={setMessage}
+              onAmendChange={setAmend}
+              onSubmit={handleCommit}
+            />
+          ) : (
+            <CommitInfoPanel commit={commit} onSelectCommitId={onSelectCommitId} />
+          )}
         </div>
       </div>
 
       <FilesSplitHandle onDrag={onFilesWidthDrag} onDragEnd={onFilesWidthDragEnd} />
 
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {!selectedFile ? (
+        {!activeFile ? (
           <div className="flex h-full items-center justify-center px-4 text-[12px] text-ink-muted">
             Select a file to view its diff.
           </div>
@@ -240,72 +697,567 @@ export function CommitFilesPane({
           </div>
         )}
       </div>
+
+      {pendingDiscard && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface-raised p-4">
+            <h3 className="mb-2 font-semibold">Discard changes</h3>
+            <p className="mb-4 text-sm text-ink-muted">
+              Discard {pendingDiscard.area ?? "local"} changes to{" "}
+              <span className="font-filename text-ink">{pendingDiscard.path}</span>?
+              This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setPendingDiscard(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={busy}
+                onClick={() => {
+                  const file = pendingDiscard;
+                  setPendingDiscard(null);
+                  if (!file?.area) return;
+                  void runMutation(() =>
+                    api.discardPaths(repositoryId, [file.path], file.area as ChangeArea),
+                  );
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingFileAction && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface-raised p-4">
+            <h3 className="mb-2 font-semibold">
+              {pendingFileAction.kind === "remove"
+                ? pendingFileAction.files.length > 1
+                  ? "Remove files"
+                  : "Remove file"
+                : "Stop tracking"}
+            </h3>
+            <p className="mb-4 text-sm text-ink-muted">
+              {pendingFileAction.kind === "remove" ? (
+                pendingFileAction.files.length === 1 ? (
+                  <>
+                    Remove{" "}
+                    <span className="font-filename text-ink">
+                      {pendingFileAction.files[0]!.path}
+                    </span>{" "}
+                    from the working tree
+                    {pendingFileAction.files[0]!.area === "untracked"
+                      ? ""
+                      : " and index"}
+                    ? This cannot be undone.
+                  </>
+                ) : (
+                  <>
+                    Remove {pendingFileAction.files.length} selected files from
+                    the working tree (and index when tracked)? This cannot be
+                    undone.
+                  </>
+                )
+              ) : pendingFileAction.files.length === 1 ? (
+                <>
+                  Stop tracking{" "}
+                  <span className="font-filename text-ink">
+                    {pendingFileAction.files[0]!.path}
+                  </span>
+                  ? The file will stay on disk but leave the index.
+                </>
+              ) : (
+                <>
+                  Stop tracking {pendingFileAction.files.length} selected files?
+                  They will stay on disk but leave the index.
+                </>
+              )}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setPendingFileAction(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={busy}
+                onClick={() => {
+                  const action = pendingFileAction;
+                  setPendingFileAction(null);
+                  if (!action) return;
+                  if (action.kind === "remove") {
+                    void removeSelected(action.files);
+                  } else {
+                    void stopTrackingSelected(action.files);
+                  }
+                }}
+              >
+                {pendingFileAction.kind === "remove" ? "Remove" : "Stop tracking"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fileMenu && (
+        <FileContextMenu
+          x={fileMenu.x}
+          y={fileMenu.y}
+          files={fileMenu.files}
+          allowMutations={fileMenu.allowMutations}
+          busy={busy}
+          revealLabel={revealInFolderLabel()}
+          onClose={() => setFileMenu(null)}
+          onOpen={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            void handleOpenFiles(targets);
+          }}
+          onReveal={() => {
+            const file = fileMenu.files[0];
+            setFileMenu(null);
+            if (file) void handleRevealFile(file);
+          }}
+          onCopyPath={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            void handleCopyPaths(targets);
+          }}
+          onAddToIndex={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            void stageSelected(targets);
+          }}
+          onUnstage={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            void unstageSelected(targets);
+          }}
+          onRemove={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            setPendingFileAction({ kind: "remove", files: targets });
+          }}
+          onStopTracking={() => {
+            const targets = fileMenu.files;
+            setFileMenu(null);
+            setPendingFileAction({ kind: "stopTracking", files: targets });
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function CommitInfoPanel({ commit }: { commit: CommitInfo }) {
-  const uncommitted = isUncommittedCommit(commit);
+function FileSection({
+  title,
+  files,
+  selectedKeys,
+  busy,
+  emptyHint,
+  stagedChecked,
+  onSelect,
+  onContextMenu,
+  onToggleStaged,
+  bulkAction,
+  discardAction,
+}: {
+  title: string;
+  files: CommitFileChange[];
+  selectedKeys: Set<string>;
+  busy: boolean;
+  emptyHint: string;
+  /** Reflects whether files in this section are currently staged. */
+  stagedChecked: boolean;
+  onSelect: (file: CommitFileChange, e: ReactMouseEvent) => void;
+  onContextMenu: (e: ReactMouseEvent, file: CommitFileChange) => void;
+  onToggleStaged: (file: CommitFileChange, checked: boolean) => void;
+  bulkAction?: { label: string; onClick: () => void };
+  discardAction: { onClick: (file: CommitFileChange) => void };
+}) {
+  return (
+    <div className="border-b border-border/60 last:border-b-0">
+      <div className="flex items-center justify-between gap-2 px-3 py-1">
+        <div className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+          {title}
+          <span className="ml-1 tabular-nums text-ink-muted/80">({files.length})</span>
+        </div>
+        {bulkAction && (
+          <button
+            type="button"
+            className="text-[10px] text-accent hover:underline disabled:opacity-50"
+            disabled={busy}
+            onClick={bulkAction.onClick}
+          >
+            {bulkAction.label}
+          </button>
+        )}
+      </div>
+      {files.length === 0 ? (
+        <p className="px-3 pb-2 text-[11px] text-ink-muted">{emptyHint}</p>
+      ) : (
+        <ul>
+          {files.map((file) => {
+            const isSelected = selectedKeys.has(fileKey(file));
+            return (
+              <li
+                key={`${file.area}:${file.status}:${file.oldPath ?? ""}:${file.path}`}
+                className={[
+                  "group flex items-center gap-1 pr-1",
+                  isSelected ? "bg-accent/20" : "hover:bg-surface-overlay/60",
+                ].join(" ")}
+                onContextMenu={(e) => onContextMenu(e, file)}
+              >
+                <label
+                  className="flex shrink-0 cursor-pointer items-center pl-2.5"
+                  title={stagedChecked ? "Unstage" : "Stage"}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-[var(--color-accent)]"
+                    checked={stagedChecked}
+                    disabled={busy}
+                    aria-label={
+                      stagedChecked
+                        ? `Unstage ${file.path}`
+                        : `Stage ${file.path}`
+                    }
+                    onChange={(e) => onToggleStaged(file, e.target.checked)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={(e) => onSelect(file, e)}
+                  className="flex min-w-0 flex-1 items-center gap-2 px-2 py-0.5 text-left"
+                  title={
+                    file.oldPath
+                      ? `${file.oldPath} → ${file.path}`
+                      : file.path
+                  }
+                >
+                  <StatusBadge status={file.status} uncommitted />
+                  <span className="font-filename min-w-0 truncate text-ink">
+                    {file.path}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-danger opacity-0 hover:bg-danger/10 group-hover:opacity-100 disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => discardAction.onClick(file)}
+                >
+                  Discard
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FileContextMenu({
+  x,
+  y,
+  files,
+  allowMutations,
+  busy,
+  revealLabel,
+  onClose,
+  onOpen,
+  onReveal,
+  onCopyPath,
+  onAddToIndex,
+  onUnstage,
+  onRemove,
+  onStopTracking,
+}: {
+  x: number;
+  y: number;
+  files: CommitFileChange[];
+  allowMutations: boolean;
+  busy: boolean;
+  revealLabel: string;
+  onClose: () => void;
+  onOpen: () => void;
+  onReveal: () => void;
+  onCopyPath: () => void;
+  onAddToIndex: () => void;
+  onUnstage: () => void;
+  onRemove: () => void;
+  onStopTracking: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const multi = files.length > 1;
+  const allStaged = files.length > 0 && files.every((f) => f.area === "staged");
+  const allNotStaged =
+    files.length > 0 && files.every((f) => f.area !== "staged");
+  const allTracked =
+    files.length > 0 && files.every((f) => f.area !== "untracked");
+  const showAdd = allowMutations && (multi || allNotStaged);
+  const showUnstage = allowMutations && (multi || allStaged);
+  const showStopTracking = allowMutations && allTracked;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - rect.width - pad);
+    }
+    if (top + rect.height > window.innerHeight - pad) {
+      top = Math.max(pad, window.innerHeight - rect.height - pad);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [x, y]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="File actions"
+      className="fixed z-50 min-w-48 rounded-md border border-border bg-surface-raised py-1 text-[12px] shadow-xl shadow-black/40"
+      style={{ left: x, top: y }}
+    >
+      <MenuItem disabled={busy} onClick={onOpen}>
+        Open
+      </MenuItem>
+      <MenuItem disabled={busy || multi} onClick={onReveal}>
+        {revealLabel}
+      </MenuItem>
+      <MenuItem disabled={busy} onClick={onCopyPath}>
+        Copy Path to Clipboard
+      </MenuItem>
+      {allowMutations && (
+        <>
+          <div className="my-1 border-t border-border" role="separator" />
+          {showAdd && (
+            <MenuItem disabled={busy || !allNotStaged} onClick={onAddToIndex}>
+              Add to index
+            </MenuItem>
+          )}
+          {showUnstage && (
+            <MenuItem disabled={busy || !allStaged} onClick={onUnstage}>
+              Unstage from index
+            </MenuItem>
+          )}
+          <MenuItem disabled={busy} danger onClick={onRemove}>
+            Remove
+          </MenuItem>
+          {showStopTracking && (
+            <MenuItem disabled={busy} onClick={onStopTracking}>
+              Stop tracking
+            </MenuItem>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  children,
+  onClick,
+  disabled,
+  danger,
+}: {
+  children: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      className={[
+        "block w-full px-2.5 py-1 text-left disabled:opacity-50",
+        danger
+          ? "text-danger hover:bg-danger/10"
+          : "text-ink hover:bg-surface-overlay",
+      ].join(" ")}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CommitForm({
+  message,
+  amend,
+  busy,
+  canCommit,
+  stagedCount,
+  actionError,
+  onMessageChange,
+  onAmendChange,
+  onSubmit,
+}: {
+  message: string;
+  amend: boolean;
+  busy: boolean;
+  canCommit: boolean;
+  stagedCount: number;
+  actionError: string | null;
+  onMessageChange: (v: string) => void;
+  onAmendChange: (v: boolean) => void;
+  onSubmit: (e: FormEvent) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-2 px-3 py-2 text-[12px]">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+        Commit
+      </div>
+      <textarea
+        className="field-input min-h-[72px] resize-y font-sans text-[12px]"
+        placeholder="Commit message"
+        value={message}
+        onChange={(e) => onMessageChange(e.target.value)}
+        disabled={busy}
+      />
+      <label className="flex items-center gap-2 text-[11px] text-ink-muted">
+        <input
+          type="checkbox"
+          checked={amend}
+          onChange={(e) => onAmendChange(e.target.checked)}
+          disabled={busy}
+        />
+        Amend previous commit
+      </label>
+      {actionError && <p className="text-[11px] text-danger">{actionError}</p>}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-ink-muted">
+          {stagedCount} staged
+        </span>
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={
+            busy || !canCommit || (!amend && !message.trim()) || (!amend && stagedCount === 0)
+          }
+        >
+          {busy ? "Working…" : amend ? "Amend" : "Commit"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CommitInfoPanel({
+  commit,
+  onSelectCommitId,
+}: {
+  commit: CommitInfo;
+  onSelectCommitId?: (commitId: string) => void;
+}) {
+  const author =
+    commit.authorName || commit.authorEmail
+      ? [commit.authorName, commit.authorEmail ? `<${commit.authorEmail}>` : null]
+          .filter(Boolean)
+          .join(" ")
+      : "—";
 
   return (
     <div className="space-y-2 px-3 py-2 text-[12px]">
       <div className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">
         Commit
       </div>
-      <div className="font-medium leading-snug text-ink">
-        {uncommitted ? "Uncommitted changes" : commit.subject}
-      </div>
-      {!uncommitted && (
-        <>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-            <dt className="text-ink-muted">Hash</dt>
-            <dd className="min-w-0 truncate font-mono text-ink" title={commit.id}>
-              {commit.id}
-            </dd>
-            <dt className="text-ink-muted">Author</dt>
-            <dd className="min-w-0 truncate text-ink">{commit.authorName || "—"}</dd>
-            <dt className="text-ink-muted">Date</dt>
-            <dd className="min-w-0 truncate text-ink">
-              {commit.authoredAt ? formatCommitTime(commit.authoredAt) : "—"}
-            </dd>
-            {commit.parents.length > 0 && (
-              <>
-                <dt className="text-ink-muted">
-                  {commit.parents.length === 1 ? "Parent" : "Parents"}
-                </dt>
-                <dd className="min-w-0 font-mono text-ink">
-                  {commit.parents.map((p) => p.slice(0, 7)).join(", ")}
-                </dd>
-              </>
-            )}
-          </dl>
-          {commit.refs.length > 0 && (
-            <div className="flex flex-wrap gap-1 pt-0.5">
-              {commit.refs.map((ref) => (
-                <span
-                  key={ref}
-                  className={[
-                    "rounded px-1 py-px text-[10px] font-medium",
-                    ref === "HEAD"
-                      ? "bg-accent/25 text-accent"
-                      : ref.startsWith("tag:")
-                        ? "bg-warning/20 text-warning"
-                        : ref.includes("/")
-                          ? "bg-surface-overlay text-ink-muted"
-                          : "bg-success/20 text-success",
-                  ].join(" ")}
-                >
-                  {ref}
+      <div className="font-medium leading-snug text-ink">{commit.subject}</div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+        <dt className="text-ink-muted">Hash</dt>
+        <dd className="min-w-0 truncate font-mono text-ink" title={commit.id}>
+          {commit.id}
+        </dd>
+        <dt className="text-ink-muted">Author</dt>
+        <dd className="min-w-0 truncate text-ink" title={author}>
+          {author}
+        </dd>
+        <dt className="text-ink-muted">Date</dt>
+        <dd className="min-w-0 truncate text-ink">
+          {commit.authoredAt ? formatCommitTime(commit.authoredAt) : "—"}
+        </dd>
+        {commit.parents.length > 0 && (
+          <>
+            <dt className="text-ink-muted">
+              {commit.parents.length === 1 ? "Parent" : "Parents"}
+            </dt>
+            <dd className="min-w-0 font-mono text-ink">
+              {commit.parents.map((parentId, index) => (
+                <span key={parentId}>
+                  {index > 0 && <span className="text-ink-muted">, </span>}
+                  {onSelectCommitId ? (
+                    <button
+                      type="button"
+                      className="text-accent hover:underline"
+                      title={parentId}
+                      onClick={() => onSelectCommitId(parentId)}
+                    >
+                      {parentId.slice(0, 7)}
+                    </button>
+                  ) : (
+                    <span title={parentId}>{parentId.slice(0, 7)}</span>
+                  )}
                 </span>
               ))}
-            </div>
-          )}
-        </>
-      )}
-      {uncommitted && (
-        <p className="text-[11px] text-ink-muted">
-          Local working-tree changes that have not been committed yet.
-        </p>
+            </dd>
+          </>
+        )}
+      </dl>
+      {commit.refs.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {commit.refs.map((ref) => (
+            <span
+              key={ref}
+              className={[
+                "rounded px-1 py-px text-[10px] font-medium",
+                ref === "HEAD"
+                  ? "bg-accent/25 text-accent"
+                  : ref.startsWith("tag:")
+                    ? "bg-warning/20 text-warning"
+                    : ref.includes("/")
+                      ? "bg-surface-overlay text-ink-muted"
+                      : "bg-success/20 text-success",
+              ].join(" ")}
+            >
+              {ref}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -373,27 +1325,75 @@ function FilesSplitHandle({
   );
 }
 
+/** Directory path first (root / empty dir first), then filename. */
+function compareByDirThenName(a: CommitFileChange, b: CommitFileChange): number {
+  const [dirA, nameA] = splitDirAndName(a.path);
+  const [dirB, nameB] = splitDirAndName(b.path);
+  const dirCmp = dirA.localeCompare(dirB, undefined, { sensitivity: "base" });
+  if (dirCmp !== 0) return dirCmp;
+  return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+}
+
+function splitDirAndName(path: string): [string, string] {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (slash === -1) return ["", path];
+  return [path.slice(0, slash), path.slice(slash + 1)];
+}
+
 function statusLabel(status: string): string {
   const letter = status.charAt(0);
   if (letter === "?") return "U";
   return letter || "?";
 }
 
-function statusClass(status: string): string {
-  const letter = status.charAt(0);
-  switch (letter) {
-    case "A":
-      return "text-success";
-    case "D":
-      return "text-danger";
-    case "R":
-    case "C":
-      return "text-accent";
-    case "?":
-      return "text-ink-muted";
-    case "U":
-      return "text-warning";
-    default:
-      return "text-warning";
+/** Colored status chip: letter on a filled rectangle. */
+function StatusBadge({
+  status,
+  uncommitted,
+}: {
+  status: string;
+  uncommitted: boolean;
+}) {
+  const letter = statusLabel(status);
+  const kind = status.charAt(0);
+
+  // Dark letter on color in dark theme; white letter in light theme.
+  const onColor =
+    "text-[#1a1200] [:is(html.light)_&]:text-white";
+
+  let className: string;
+  let style: { backgroundColor: string } | undefined;
+
+  if (kind === "M" || kind === "T") {
+    className = onColor;
+    style = { backgroundColor: "var(--status-modified)" };
+  } else if (kind === "A" || kind === "?") {
+    className = onColor;
+    style = {
+      backgroundColor: uncommitted
+        ? "var(--status-new)"
+        : "var(--status-added)",
+    };
+  } else if (kind === "D") {
+    className = "bg-danger text-white";
+  } else if (kind === "R" || kind === "C") {
+    className = "bg-accent text-white";
+  } else {
+    className = onColor;
+    style = { backgroundColor: "var(--status-modified)" };
   }
+
+  return (
+    <span
+      className={[
+        "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px]",
+        "font-mono text-[10px] font-bold leading-none",
+        className,
+      ].join(" ")}
+      style={style}
+      aria-label={letter}
+    >
+      {letter}
+    </span>
+  );
 }

@@ -11,6 +11,7 @@ import type {
   RepoStatus,
   UpdateAccountRequest,
   BranchInfo,
+  ChangeArea,
   CommitFileChange,
   CommitInfo,
   Workspace,
@@ -144,12 +145,84 @@ export async function getCommitFileDiff(
   commit: string,
   path: string,
   oldPath?: string | null,
+  area?: ChangeArea | null,
 ): Promise<string> {
   return invoke<string>("get_commit_file_diff", {
     id,
     commit,
     path,
     oldPath: oldPath ?? null,
+    area: area ?? null,
+  });
+}
+
+export async function stagePaths(
+  id: RepositoryId,
+  paths: string[],
+): Promise<void> {
+  return invoke<void>("stage_paths", { id, paths });
+}
+
+export async function unstagePaths(
+  id: RepositoryId,
+  paths: string[],
+): Promise<void> {
+  return invoke<void>("unstage_paths", { id, paths });
+}
+
+export async function discardPaths(
+  id: RepositoryId,
+  paths: string[],
+  area: ChangeArea,
+): Promise<void> {
+  return invoke<void>("discard_paths", { id, paths, area });
+}
+
+export async function removePaths(
+  id: RepositoryId,
+  paths: string[],
+  area: ChangeArea,
+): Promise<void> {
+  return invoke<void>("remove_paths", { id, paths, area });
+}
+
+export async function stopTrackingPaths(
+  id: RepositoryId,
+  paths: string[],
+): Promise<void> {
+  return invoke<void>("stop_tracking_paths", { id, paths });
+}
+
+export async function resolveRepositoryFilePath(
+  id: RepositoryId,
+  path: string,
+): Promise<string> {
+  return invoke<string>("resolve_repository_file_path", { id, path });
+}
+
+export async function openRepositoryFile(
+  id: RepositoryId,
+  path: string,
+): Promise<void> {
+  return invoke<void>("open_repository_file", { id, path });
+}
+
+export async function revealRepositoryFile(
+  id: RepositoryId,
+  path: string,
+): Promise<void> {
+  return invoke<void>("reveal_repository_file", { id, path });
+}
+
+export async function commitRepository(
+  id: RepositoryId,
+  message: string,
+  amend?: boolean,
+): Promise<string> {
+  return invoke<string>("commit_repository", {
+    id,
+    message,
+    amend: amend ?? false,
   });
 }
 

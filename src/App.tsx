@@ -6,6 +6,7 @@ import { RepoDetail } from "./components/RepoDetail";
 import { ConfirmModal } from "./components/Modal";
 import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
 import { RepoAccountDialog } from "./components/RepoAccountDialog";
+import { SettingsPanel } from "./components/SettingsPanel";
 import {
   loadSidebarWidth,
   SidebarResizeHandle,
@@ -16,10 +17,19 @@ import {
   onMenuAccounts,
   onMenuNewWorkspace,
   onMenuOpenWorkspace,
+  onMenuSettings,
   onRepoFetchFinished,
   onRepoFetchProgress,
   onWorkspaceFetchFinished,
 } from "./lib/events";
+import {
+  loadSelectedRepository,
+  persistSelectedRepository,
+} from "./lib/workspaceSelection";
+import {
+  restoreWorkspaceWindowGeometry,
+  saveWorkspaceWindowGeometry,
+} from "./lib/workspaceWindowState";
 import type {
   AccountId,
   AppSnapshot,
@@ -54,7 +64,7 @@ export default function App() {
   const [statuses, setStatuses] = useState<RepoStatus[]>([]);
   const [selectedId, setSelectedId] = useState<RepositoryId | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
-  const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
+  const [sidebarWidth, setSidebarWidth] = useState(256);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -66,6 +76,7 @@ export default function App() {
   const [pendingRemoveId, setPendingRemoveId] = useState<RepositoryId | null>(null);
   /** Global accounts manager (menu bar). */
   const [showAccounts, setShowAccounts] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   /** Repository whose per-repo account dialog is open (context menu). */
   const [accountsRepoId, setAccountsRepoId] = useState<RepositoryId | null>(null);
   const [detection, setDetection] = useState<DetectedAccount | null>(null);
@@ -106,16 +117,30 @@ export default function App() {
     [],
   );
 
+  const selectRepository = useCallback(
+    (workspaceId: WorkspaceId, repositoryId: RepositoryId | null) => {
+      setSelectedId(repositoryId);
+      persistSelectedRepository(workspaceId, repositoryId);
+    },
+    [],
+  );
+
   const refreshStatuses = useCallback(
     async (workspaceId: WorkspaceId) => {
       try {
         const list = await api.listWorkspaceStatuses(workspaceId);
         setStatuses(list);
         setSelectedId((prev) => {
-          const next =
-            prev && list.some((s) => s.repositoryId === prev)
+          const inList = (id: RepositoryId | null | undefined) =>
+            Boolean(id && list.some((s) => s.repositoryId === id));
+          const saved = loadSelectedRepository(workspaceId);
+          // Prefer the workspace's saved selection so reopen restores it.
+          const next = inList(saved)
+            ? saved
+            : inList(prev)
               ? prev
               : (list[0]?.repositoryId ?? null);
+          persistSelectedRepository(workspaceId, next);
           const remotes = list.find((s) => s.repositoryId === next)?.remotes;
           void refreshBranches(next, remotes);
           return next;
@@ -145,11 +170,47 @@ export default function App() {
       await api.setActiveWorkspace(id);
       await refreshSnapshot();
       setWindowWorkspaceId(id);
+      setSidebarWidth(loadSidebarWidth(id));
       setShowSplash(false);
+      await restoreWorkspaceWindowGeometry(id);
       await refreshStatuses(id);
     },
     [refreshSnapshot, refreshStatuses],
   );
+
+  // Persist window size / position for the bound workspace.
+  useEffect(() => {
+    if (!windowWorkspaceId) return;
+    let cancelled = false;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unlisteners: Array<() => void> = [];
+
+    const scheduleSave = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        if (cancelled || !windowWorkspaceIdRef.current) return;
+        void saveWorkspaceWindowGeometry(windowWorkspaceIdRef.current);
+      }, 200);
+    };
+
+    void (async () => {
+      try {
+        const win = getCurrentWindow();
+        unlisteners.push(await win.onResized(() => scheduleSave()));
+        unlisteners.push(await win.onMoved(() => scheduleSave()));
+        // Capture initial geometry once the workspace is bound.
+        scheduleSave();
+      } catch {
+        // Browser preview has no Tauri window events.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (debounce) clearTimeout(debounce);
+      for (const off of unlisteners) off();
+    };
+  }, [windowWorkspaceId]);
 
   useEffect(() => {
     void (async () => {
@@ -285,6 +346,12 @@ export default function App() {
           setShowAccounts(true);
         }),
       );
+      unlisteners.push(
+        await onMenuSettings(() => {
+          if (cancelled) return;
+          setShowSettings(true);
+        }),
+      );
     }
 
     void bind();
@@ -341,7 +408,7 @@ export default function App() {
       const result = await api.addRepository(windowWorkspaceId, path);
       await refreshSnapshot();
       await refreshStatuses(windowWorkspaceId);
-      setSelectedId(result.repository.id);
+      selectRepository(windowWorkspaceId, result.repository.id);
       if (result.detection && !result.autoAssignedAccountId) {
         setDetection(result.detection);
         setDetectionRepoId(result.repository.id);
@@ -480,6 +547,10 @@ export default function App() {
     />
   ) : null;
 
+  const settingsDialog = showSettings ? (
+    <SettingsPanel onClose={() => setShowSettings(false)} />
+  ) : null;
+
   if (showSplash || !windowWorkspaceId) {
     return (
       <>
@@ -492,6 +563,7 @@ export default function App() {
           onCreate={handleCreateWorkspace}
         />
         {accountsDialog}
+        {settingsDialog}
       </>
     );
   }
@@ -514,21 +586,33 @@ export default function App() {
       )}
       <div className="flex min-h-0 flex-1">
         <RepoSidebar
+          workspaceId={windowWorkspaceId}
           statuses={statuses}
           selectedId={selectedId}
           branches={branches}
           width={sidebarWidth}
           busy={busy}
-          onSelect={setSelectedId}
+          onSelect={(id) => {
+            if (windowWorkspaceId) selectRepository(windowWorkspaceId, id);
+            else setSelectedId(id);
+          }}
           onAddRepository={handleAddRepository}
           onManageAccounts={(id) => setAccountsRepoId(id)}
           onRemoveRepository={(id) => setPendingRemoveId(id)}
         />
-        <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} />
+        <SidebarResizeHandle
+          workspaceId={windowWorkspaceId}
+          width={sidebarWidth}
+          onResize={setSidebarWidth}
+        />
         <RepoDetail
           workspaceId={windowWorkspaceId}
           status={selected}
           branches={branches}
+          onWorkingTreeChanged={() => {
+            if (windowWorkspaceId) void refreshStatuses(windowWorkspaceId);
+            if (selectedId) void refreshBranches(selectedId);
+          }}
         />
       </div>
       {accountsRepoContext && (
@@ -554,6 +638,7 @@ export default function App() {
         />
       )}
       {accountsDialog}
+      {settingsDialog}
       {showCreateFromDetection && detection && (
         <AddAccountForm
           draft={detection}

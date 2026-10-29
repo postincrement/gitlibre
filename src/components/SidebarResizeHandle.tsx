@@ -1,47 +1,42 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-
-const MIN_WIDTH = 180;
-const MAX_WIDTH = 560;
-const STORAGE_KEY = "gitlibre.sidebarWidth";
-
-export function loadSidebarWidth(fallback = 256): number {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return fallback;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return fallback;
-    return clamp(n, MIN_WIDTH, MAX_WIDTH);
-  } catch {
-    return fallback;
-  }
-}
-
-function clamp(n: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, n));
-}
-
-function persistWidth(width: number) {
-  try {
-    localStorage.setItem(STORAGE_KEY, String(width));
-  } catch {
-    // Ignore quota / private mode failures.
-  }
-}
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import {
+  clampSidebarWidth,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  persistSidebarWidth,
+} from "../lib/workspaceLayout";
+import type { WorkspaceId } from "../types/models";
 
 interface SidebarResizeHandleProps {
+  workspaceId: WorkspaceId;
   width: number;
   onResize: (width: number) => void;
 }
 
-export function SidebarResizeHandle({ width, onResize }: SidebarResizeHandleProps) {
+export function SidebarResizeHandle({
+  workspaceId,
+  width,
+  onResize,
+}: SidebarResizeHandleProps) {
   const [dragging, setDragging] = useState(false);
   const startX = useRef(0);
   const startWidth = useRef(width);
   const widthRef = useRef(width);
+  const workspaceIdRef = useRef(workspaceId);
 
   useEffect(() => {
     widthRef.current = width;
   }, [width]);
+
+  useEffect(() => {
+    workspaceIdRef.current = workspaceId;
+  }, [workspaceId]);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -58,13 +53,15 @@ export function SidebarResizeHandle({ width, onResize }: SidebarResizeHandleProp
     if (!dragging) return;
 
     function onMove(e: PointerEvent) {
-      const next = clamp(startWidth.current + (e.clientX - startX.current), MIN_WIDTH, MAX_WIDTH);
+      const next = clampSidebarWidth(
+        startWidth.current + (e.clientX - startX.current),
+      );
       onResize(next);
     }
 
     function onUp() {
       setDragging(false);
-      persistWidth(widthRef.current);
+      persistSidebarWidth(workspaceIdRef.current, widthRef.current);
     }
 
     window.addEventListener("pointermove", onMove);
@@ -89,22 +86,22 @@ export function SidebarResizeHandle({ width, onResize }: SidebarResizeHandleProp
       role="separator"
       aria-orientation="vertical"
       aria-valuenow={Math.round(width)}
-      aria-valuemin={MIN_WIDTH}
-      aria-valuemax={MAX_WIDTH}
+      aria-valuemin={MIN_SIDEBAR_WIDTH}
+      aria-valuemax={MAX_SIDEBAR_WIDTH}
       aria-label="Resize sidebar"
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={(e) => {
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          const next = clamp(width - 16, MIN_WIDTH, MAX_WIDTH);
+          const next = clampSidebarWidth(width - 16);
           onResize(next);
-          persistWidth(next);
+          persistSidebarWidth(workspaceId, next);
         } else if (e.key === "ArrowRight") {
           e.preventDefault();
-          const next = clamp(width + 16, MIN_WIDTH, MAX_WIDTH);
+          const next = clampSidebarWidth(width + 16);
           onResize(next);
-          persistWidth(next);
+          persistSidebarWidth(workspaceId, next);
         }
       }}
       className={[
@@ -115,3 +112,5 @@ export function SidebarResizeHandle({ width, onResize }: SidebarResizeHandleProp
     />
   );
 }
+
+export { loadSidebarWidth } from "../lib/workspaceLayout";

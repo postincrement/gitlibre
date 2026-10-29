@@ -3,6 +3,15 @@ use crate::git::executor::GitExecutor;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Where a working-tree change lives relative to the index.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeArea {
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
 /// A path changed in a commit (or the working tree).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +21,9 @@ pub struct CommitFileChange {
     pub path: String,
     /// Present for renames/copies (status R/C).
     pub old_path: Option<String>,
+    /// Set for working-tree listings; omitted for historical commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<ChangeArea>,
 }
 
 /// Synthetic id used by the UI for the dirty working-tree row.
@@ -64,8 +76,13 @@ async fn list_working_tree_files(
     executor: &GitExecutor,
     repo_path: &Path,
 ) -> CoreResult<Vec<CommitFileChange>> {
+    // `-uall` lists files inside untracked directories instead of a single `dir/`
+    // entry. Empty directories are never reported by Git (and we skip `…/` paths).
     let out = executor
-        .run(repo_path, &["status", "--porcelain=v1"])
+        .run(
+            repo_path,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )
         .await?;
     if !out.success() {
         return Err(CoreError::process_failed(format!(
@@ -82,39 +99,101 @@ fn parse_porcelain_v1_paths(text: &str) -> Vec<CommitFileChange> {
         if line.len() < 4 {
             continue;
         }
-        let xy = &line[..2];
+        let x = line.as_bytes()[0] as char;
+        let y = line.as_bytes()[1] as char;
         let rest = line[3..].trim();
         if rest.is_empty() {
             continue;
         }
-        if let Some((old, new)) = rest.split_once(" -> ") {
+
+        let (path, old_path) = if let Some((old, new)) = rest.split_once(" -> ") {
+            (
+                unquote_porcelain_path(new),
+                Some(unquote_porcelain_path(old)),
+            )
+        } else {
+            (unquote_porcelain_path(rest), None)
+        };
+
+        // Git may emit `?? dirname/` for untracked dirs (quoted when the path
+        // has spaces). Empty dirs are omitted entirely. Never surface
+        // directory-only rows in the file list.
+        if path.ends_with('/') || path.ends_with('\\') {
+            continue;
+        }
+
+        if x == '?' && y == '?' {
             files.push(CommitFileChange {
-                status: "R".to_string(),
-                path: new.to_string(),
-                old_path: Some(old.to_string()),
+                status: "?".to_string(),
+                path,
+                old_path: None,
+                area: Some(ChangeArea::Untracked),
             });
             continue;
         }
-        let status = if xy.contains('?') {
-            "?".to_string()
-        } else if xy.contains('A') || xy.starts_with('A') {
-            "A".to_string()
-        } else if xy.contains('D') {
-            "D".to_string()
-        } else if xy.contains('R') {
-            "R".to_string()
-        } else if xy.contains('U') {
-            "U".to_string()
-        } else {
-            "M".to_string()
-        };
-        files.push(CommitFileChange {
-            status,
-            path: rest.to_string(),
-            old_path: None,
-        });
+
+        // Index (staged) side.
+        if x != ' ' && x != '?' {
+            files.push(CommitFileChange {
+                status: status_letter(x, old_path.is_some()),
+                path: path.clone(),
+                old_path: old_path.clone(),
+                area: Some(ChangeArea::Staged),
+            });
+        }
+
+        // Worktree (unstaged) side — unmerged `U` counted here too.
+        if y != ' ' && y != '?' {
+            files.push(CommitFileChange {
+                status: status_letter(y, old_path.is_some()),
+                path,
+                old_path,
+                area: Some(ChangeArea::Unstaged),
+            });
+        }
     }
     files
+}
+
+/// Decode a porcelain v1 path, stripping C-style quotes Git adds for spaces
+/// and other special characters.
+fn unquote_porcelain_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('\\') => out.push('\\'),
+                    Some('"') => out.push('"'),
+                    Some(other) => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                    None => out.push('\\'),
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn status_letter(ch: char, is_rename_line: bool) -> String {
+    if is_rename_line && (ch == 'R' || ch == 'C') {
+        return ch.to_string();
+    }
+    match ch {
+        'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' => ch.to_string(),
+        _ => "M".to_string(),
+    }
 }
 
 /// Unified diff for a single path in `commit`, or working-tree vs HEAD when
@@ -128,7 +207,7 @@ pub async fn get_commit_file_diff(
     commit: &str,
     path: &str,
 ) -> CoreResult<String> {
-    get_commit_file_diff_with_old_path(executor, repo_path, commit, path, None).await
+    get_commit_file_diff_with_old_path(executor, repo_path, commit, path, None, None).await
 }
 
 pub async fn get_commit_file_diff_with_old_path(
@@ -137,6 +216,7 @@ pub async fn get_commit_file_diff_with_old_path(
     commit: &str,
     path: &str,
     old_path: Option<&str>,
+    area: Option<ChangeArea>,
 ) -> CoreResult<String> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
@@ -147,7 +227,7 @@ pub async fn get_commit_file_diff_with_old_path(
     }
 
     if commit == UNCOMMITTED_COMMIT_ID {
-        return working_tree_file_diff(executor, repo_path, path, old_path).await;
+        return working_tree_file_diff(executor, repo_path, path, old_path, area).await;
     }
     if commit.is_empty() || commit.contains('\0') || commit.starts_with('-') {
         return Err(CoreError::new(
@@ -244,8 +324,58 @@ async fn working_tree_file_diff(
     repo_path: &Path,
     path: &str,
     old_path: Option<&str>,
+    area: Option<ChangeArea>,
 ) -> CoreResult<String> {
     let path_args = pathspec_args(path, old_path);
+
+    match area {
+        Some(ChangeArea::Staged) => {
+            let mut cached_args = vec![
+                "diff".to_string(),
+                "--cached".to_string(),
+                "--".to_string(),
+            ];
+            cached_args.extend(path_args);
+            let cached = run_git_strings(executor, repo_path, &cached_args).await?;
+            if diff_command_ok(&cached) {
+                return Ok(cached.stdout_lossy());
+            }
+            return Err(CoreError::process_failed(format!(
+                "git diff --cached failed: {}",
+                cached.stderr_lossy().trim()
+            )));
+        }
+        Some(ChangeArea::Unstaged) => {
+            let mut args = vec!["diff".to_string(), "--".to_string()];
+            args.extend(path_args);
+            let out = run_git_strings(executor, repo_path, &args).await?;
+            if diff_command_ok(&out) {
+                return Ok(out.stdout_lossy());
+            }
+            return Err(CoreError::process_failed(format!(
+                "git diff failed: {}",
+                out.stderr_lossy().trim()
+            )));
+        }
+        Some(ChangeArea::Untracked) => {
+            let untracked = executor
+                .run(
+                    repo_path,
+                    &["diff", "--no-index", "--", "/dev/null", path],
+                )
+                .await?;
+            if diff_command_ok(&untracked) {
+                return Ok(untracked.stdout_lossy());
+            }
+            return Err(CoreError::process_failed(format!(
+                "git diff --no-index failed: {}",
+                untracked.stderr_lossy().trim()
+            )));
+        }
+        None => {}
+    }
+
+    // Fallback when area is unknown: prefer worktree vs HEAD, then staged, then untracked.
     let mut vs_head_args = vec!["diff".to_string(), "HEAD".to_string(), "--".to_string()];
     vs_head_args.extend(path_args.iter().cloned());
     let vs_head = run_git_strings(executor, repo_path, &vs_head_args).await?;
@@ -253,7 +383,6 @@ async fn working_tree_file_diff(
         return Ok(vs_head.stdout_lossy());
     }
 
-    // Staged-only (e.g. new file added to index).
     let mut cached_args = vec![
         "diff".to_string(),
         "--cached".to_string(),
@@ -265,7 +394,6 @@ async fn working_tree_file_diff(
         return Ok(cached.stdout_lossy());
     }
 
-    // Untracked: synthesize an add diff from the working tree file.
     let untracked = executor
         .run(
             repo_path,
@@ -333,6 +461,7 @@ fn parse_name_status(text: &str) -> Vec<CommitFileChange> {
                 } else {
                     Some(old_path)
                 },
+                area: None,
             });
         } else {
             let path = parts.next().unwrap_or("").to_string();
@@ -343,6 +472,7 @@ fn parse_name_status(text: &str) -> Vec<CommitFileChange> {
                 status: status_letter,
                 path,
                 old_path: None,
+                area: None,
             });
         }
     }
@@ -367,6 +497,30 @@ mod tests {
         assert_eq!(files[2].status, "R100");
         assert_eq!(files[2].old_path.as_deref(), Some("old.txt"));
         assert_eq!(files[2].path, "newname.txt");
+    }
+
+    #[test]
+    fn porcelain_skips_directory_only_entries() {
+        let text = " M tracked.txt\n?? empty-looking/\n?? nested/file.txt\n";
+        let files = parse_porcelain_v1_paths(text);
+        assert!(files.iter().all(|f| !f.path.ends_with('/')));
+        assert!(files.iter().any(|f| f.path == "tracked.txt"));
+        assert!(files.iter().any(|f| f.path == "nested/file.txt"));
+        assert!(!files.iter().any(|f| f.path == "empty-looking/"));
+    }
+
+    #[test]
+    fn porcelain_skips_quoted_directory_entries_with_spaces() {
+        let text = concat!(
+            "?? \"test workspace/dir1/\"\n",
+            "?? \"test workspace/dir2/\"\n",
+            "?? \"test workspace/a file.txt\"\n",
+        );
+        let files = parse_porcelain_v1_paths(text);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "test workspace/a file.txt");
+        assert!(files.iter().all(|f| !f.path.ends_with('/')));
+        assert!(!files.iter().any(|f| f.path.contains('"')));
     }
 
     #[tokio::test]

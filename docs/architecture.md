@@ -19,8 +19,14 @@ Framework-agnostic library:
 | `store` | In-memory config + atomic JSON persistence + migrations |
 | `secrets` | `SecretStore` trait; OS keychain + in-memory test store |
 | `auth` | Per-invocation `GitAuth` (HTTPS bearer / SSH key env) |
+| `detect` / `ssh_config` | Remote URL + SSH config + local identity hints |
 | `git::executor` | Spawn `git` with argv arrays, cwd, optional auth env |
 | `git::status` | Porcelain v2 `-z` parsing, remotes, branch inspection |
+| `git::branches` | Local/remote branches + ahead/behind |
+| `git::log` | Topo-ordered commit history with decorations |
+| `git::show` | Commit / working-tree file lists and unified diffs |
+| `git::stage` | Stage, unstage, discard, commit (+ amend, identity) |
+| `git::identity` | Read effective / local `user.name` / `user.email` |
 | `fetch` | Per-repo locks, bounded concurrency, auth-aware fetch |
 | `error` | Typed `CoreError` + stable `ErrorCode` values |
 
@@ -32,16 +38,22 @@ Thin desktop shell:
 - Exposes typed Tauri commands.
 - Holds `AppState` (store mutex, fetch coordinator, live fetch flags).
 - Emits `repo-fetch-progress`, `repo-fetch-finished`, `workspace-fetch-finished`.
+- Native app menu (workspace New/Open, Settings, etc.).
 
 Command handlers stay thin: lock state, call core, map errors to `AppErrorDto`.
+Local mutations (stage/commit) use `FetchCoordinator::with_repo_lock` so they
+do not race an in-flight fetch on the same path.
 
 ## Frontend
 
 React + TypeScript + Vite + Tailwind.
 
-- `TopNav` — workspace selector and primary actions
-- `RepoSidebar` — per-repo branch / dirty / fetch / error indicators
-- `RepoDetail` — path, remotes, working-tree counts, fetch controls
+- `TopNav` — workspace context and fetch actions
+- `RepoSidebar` — per-repo branch / dirty / fetch / error indicators; remotes
+- `RepoDetail` — commit graph + detail split (files / diff / commit form)
+- `CommitGraph` — multi-lane visual history + uncommitted synthetic row
+- `CommitFilesPane` — file list, diffs; staged/unstaged/untracked actions + commit
+- `AccountsPanel` / `RepoAccountDialog` — account CRUD and per-repo assignment
 - `lib/api.ts` — typed `invoke` wrappers
 - `lib/events.ts` — typed listeners with cleanup in `useEffect`
 
@@ -55,7 +67,7 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 
 ## Persistence
 
-`ConfigStore` writes `config.json.tmp` then renames to `config.json`. Schema field `version` starts at `1` for future migrations.
+`ConfigStore` writes `config.json.tmp` then renames to `config.json`. Schema field `version` is `2` (v1 files migrate on open).
 
 ## Fetch concurrency
 
@@ -65,6 +77,28 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 2. Acquires a semaphore permit (default concurrency 4).
 3. Runs `git fetch --all --progress` with `GIT_TERMINAL_PROMPT=0`.
 4. Reports progress via callback; workspace fetch fans out independently.
+
+## Staging and commit
+
+Working-tree listings parse porcelain v1 into separate **staged**, **unstaged**,
+and **untracked** entries (a path can appear twice when both index and worktree
+differ). Diffs use `git diff --cached`, `git diff`, or `git diff --no-index`
+accordingly.
+
+Mutations:
+
+| Action | Git |
+|--------|-----|
+| Stage | `git add -- <paths>` |
+| Unstage | `git restore --staged -- <paths>` |
+| Discard staged | `git restore --source=HEAD --staged --worktree -- <paths>` |
+| Discard unstaged | `git restore --worktree -- <paths>` |
+| Discard untracked | `git clean -f -d -- <paths>` |
+| Commit | `git commit [-c user.*] [-m \| --no-edit] [--amend]` |
+
+When the repository has an assigned account with `commitName` / `commitEmail`,
+those values are passed as one-shot `-c user.name` / `-c user.email` (no global
+config rewrite). Otherwise system Git identity applies.
 
 ## Platform notes
 
@@ -81,7 +115,6 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
   - HTTPS: `GIT_CONFIG_*` `http.extraHeader=AUTHORIZATION: bearer …` and empty `credential.helper` for that invocation only.
   - SSH: `GIT_SSH_COMMAND=ssh -i … -o IdentitiesOnly=yes -o BatchMode=yes`.
 - Unassigned repos continue to use the user’s normal system Git credentials.
-- Config schema version is `2` (v1 files migrate on open).
 
 ### Account detection from existing repos
 
@@ -108,4 +141,4 @@ On **add repository** and when **opening an unassigned repo**, GitLibre runs det
 
 - OAuth device flow instead of PAT paste.
 - Provider REST adapters for account validation.
-- Staging, commit graph, merge tooling as additional core modules.
+- Checkout, pull/push, merge/rebase tooling as additional core modules.

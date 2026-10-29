@@ -21,10 +21,12 @@ pub use detect::{
 pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
 pub use git::{
-    get_commit_file_diff, get_commit_file_diff_with_old_path, inspect_repository,
-    list_commit_files, list_commits, list_local_branches, list_local_branches_for_remote,
-    list_remote_branches, read_commit_identity, BranchInfo, CommitFileChange, CommitIdentity,
-    CommitInfo, GitExecutor, RemoteInfo, RepoInspection, WorkingTreeStatus, UNCOMMITTED_COMMIT_ID,
+    commit_index, discard_paths, get_commit_file_diff, get_commit_file_diff_with_old_path,
+    inspect_repository, list_commit_files, list_commits, list_local_branches,
+    list_local_branches_for_remote, list_remote_branches, read_commit_identity, remove_paths,
+    resolve_repo_path, stage_paths, stop_tracking_paths, unstage_paths, BranchInfo, ChangeArea,
+    CommitFileChange, CommitIdentity, CommitInfo, GitExecutor, RemoteInfo, RepoInspection,
+    WorkingTreeStatus, UNCOMMITTED_COMMIT_ID,
 };
 pub use ids::{AccountId, RepositoryId, WorkspaceId};
 pub use models::{

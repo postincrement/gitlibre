@@ -2,9 +2,9 @@
 
 Free, open-source, cross-platform graphical Git client.
 
-GitLibre groups local repositories into **workspaces**, shows status across them in one window, and runs real system-Git operations (status, fetch) without requiring a SaaS subscription.
+GitLibre groups local repositories into **workspaces**, shows status and history across them in one window, and runs real system-Git operations (status, fetch, stage, commit) without requiring a SaaS subscription.
 
-This repository is the initial milestone: workspaces, repository registration, status inspection, and individual / workspace-wide fetch.
+Current capabilities: workspaces (multi-window), multi-account auth (PAT / SSH), commit graph, diffs, staging, and commit.
 
 ## Prerequisites
 
@@ -80,7 +80,9 @@ docs/                      # Architecture, Rust learning notes, roadmap
 
 Workspace configuration is stored as versioned JSON in the platform app config directory (for example macOS `~/Library/Application Support/com.gitlibre.desktop/config.json`). Repository files on disk are never moved or modified by add/remove.
 
-Hosting account tokens are stored in the OS keychain (service `com.gitlibre.desktop`), not in the JSON file. Use **Accounts** in the app to add a GitHub (or other) PAT / SSH key, then assign an account on a repository’s detail panel.
+Hosting account tokens are stored in the OS keychain (service `com.gitlibre.desktop`), not in the JSON file. Use **Accounts** in the app to add a GitHub (or other) PAT / SSH key, then assign an account on a repository. Optional account commit name/email are applied only to commits made from GitLibre.
+
+Select the **Uncommitted changes** row in the graph to stage, unstage, discard, and commit.
 
 ## License
 

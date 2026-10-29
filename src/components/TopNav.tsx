@@ -43,7 +43,7 @@ export function TopNav({
         </div>
       )}
 
-      <div className="ml-auto flex items-center gap-2">
+      {repoName && (
         <NavButton
           onClick={onFetchRepo}
           disabled={!canFetchRepo || busy || repoFetching}
@@ -51,6 +51,9 @@ export function TopNav({
         >
           {repoFetching ? "Fetching…" : "Fetch"}
         </NavButton>
+      )}
+
+      <div className="ml-auto flex items-center gap-2">
         <NavButton onClick={onFetchAll} disabled={!workspaceName || busy}>
           {busy && !repoFetching ? "Fetching…" : "Fetch all"}
         </NavButton>

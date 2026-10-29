@@ -137,14 +137,19 @@ export interface CommitInfo {
   parents: string[];
   subject: string;
   authorName: string;
+  authorEmail: string;
   authoredAt: string;
   refs: string[];
 }
+
+export type ChangeArea = "staged" | "unstaged" | "untracked";
 
 export interface CommitFileChange {
   status: string;
   path: string;
   oldPath: string | null;
+  /** Present for working-tree listings. */
+  area?: ChangeArea | null;
 }
 
 export interface FetchProgressEvent {

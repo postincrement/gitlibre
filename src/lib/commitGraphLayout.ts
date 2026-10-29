@@ -34,6 +34,7 @@ export function withUncommittedPseudoCommit(
     parents: parentId ? [parentId] : [],
     subject: "Uncommitted changes",
     authorName: "",
+    authorEmail: "",
     authoredAt: "",
     refs: [],
   };
@@ -204,14 +205,31 @@ export function laneColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
+/** Format a Git ISO author date in the viewer's local timezone. */
 export function formatCommitTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
+  const date = parseCommitDate(iso);
+  if (!date) return iso;
+  return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function parseCommitDate(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let date = new Date(trimmed);
+  if (!Number.isNaN(date.getTime())) return date;
+
+  // Fallback for "%ai"-style: "2024-01-02 03:04:05 +0000"
+  const normalized = trimmed
+    .replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/, "$1T$2")
+    .replace(/ ([+-])(\d{2})(\d{2})$/, "$1$2:$3");
+  date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
 }

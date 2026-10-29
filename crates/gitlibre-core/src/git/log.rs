@@ -16,6 +16,7 @@ pub struct CommitInfo {
     pub parents: Vec<String>,
     pub subject: String,
     pub author_name: String,
+    pub author_email: String,
     pub authored_at: String,
     /// Decorations such as `main`, `origin/main`, `tag: v1.0`, `HEAD`.
     pub refs: Vec<String>,
@@ -41,7 +42,7 @@ pub async fn list_commits(
     // Record / field separators keep subjects and decorations parse-safe.
     // %D = decorations without wrapping parentheses.
     let pretty = format!(
-        "%H{FIELD_SEP}%h{FIELD_SEP}%P{FIELD_SEP}%s{FIELD_SEP}%an{FIELD_SEP}%aI{FIELD_SEP}%D{RECORD_SEP}"
+        "%H{FIELD_SEP}%h{FIELD_SEP}%P{FIELD_SEP}%s{FIELD_SEP}%an{FIELD_SEP}%ae{FIELD_SEP}%aI{FIELD_SEP}%D{RECORD_SEP}"
     );
 
     let out = executor
@@ -94,6 +95,7 @@ fn parse_commit_record(record: &str) -> Option<CommitInfo> {
     let parents_raw = fields.next()?.trim();
     let subject = fields.next()?.to_string();
     let author_name = fields.next()?.to_string();
+    let author_email = fields.next()?.trim().to_string();
     let authored_at = fields.next()?.trim().to_string();
     let refs_raw = fields.next().unwrap_or("").trim();
 
@@ -112,6 +114,7 @@ fn parse_commit_record(record: &str) -> Option<CommitInfo> {
         parents,
         subject,
         author_name,
+        author_email,
         authored_at,
         refs: parse_decorations(refs_raw),
     })
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn parse_simple_record() {
         let record = format!(
-            "abc123{FIELD_SEP}abc{FIELD_SEP}def456{FIELD_SEP}Fix bug{FIELD_SEP}Ada{FIELD_SEP}2024-01-02T03:04:05Z{FIELD_SEP}HEAD -> main, origin/main"
+            "abc123{FIELD_SEP}abc{FIELD_SEP}def456{FIELD_SEP}Fix bug{FIELD_SEP}Ada{FIELD_SEP}ada@example.com{FIELD_SEP}2024-01-02T03:04:05Z{FIELD_SEP}HEAD -> main, origin/main"
         );
         let commit = parse_commit_record(&record).expect("parse");
         assert_eq!(commit.id, "abc123");
@@ -166,13 +169,14 @@ mod tests {
         assert_eq!(commit.parents, vec!["def456"]);
         assert_eq!(commit.subject, "Fix bug");
         assert_eq!(commit.author_name, "Ada");
+        assert_eq!(commit.author_email, "ada@example.com");
         assert_eq!(commit.refs, vec!["HEAD", "main", "origin/main"]);
     }
 
     #[test]
     fn parse_root_commit_and_tag() {
         let record = format!(
-            "root{FIELD_SEP}root{FIELD_SEP}{FIELD_SEP}init{FIELD_SEP}Ada{FIELD_SEP}2024-01-01T00:00:00Z{FIELD_SEP}tag: v1.0"
+            "root{FIELD_SEP}root{FIELD_SEP}{FIELD_SEP}init{FIELD_SEP}Ada{FIELD_SEP}ada@example.com{FIELD_SEP}2024-01-01T00:00:00Z{FIELD_SEP}tag: v1.0"
         );
         let commit = parse_commit_record(&record).expect("parse");
         assert!(commit.parents.is_empty());

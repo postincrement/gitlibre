@@ -2,7 +2,32 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      /* Apply saved theme before paint to avoid a flash. */
+      (function () {
+        try {
+          var pref = localStorage.getItem("gitlibre.theme") || "system";
+          var dark =
+            pref === "dark" ||
+            (pref !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.classList.toggle("dark", dark);
+          root.classList.toggle("light", !dark);
+          root.style.colorScheme = dark ? "dark" : "light";
+          var mono = localStorage.getItem("gitlibre.monospaceFilenames");
+          root.classList.toggle("filenames-mono", mono !== "false");
+          try {
+            var colours = JSON.parse(localStorage.getItem("gitlibre.statusColors") || "{}");
+            if (colours.modified) root.style.setProperty("--status-modified", colours.modified);
+            if (colours.added) root.style.setProperty("--status-added", colours.added);
+            if (colours.new) root.style.setProperty("--status-new", colours.new);
+          } catch (ce) {}
+        } catch (e) {}
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

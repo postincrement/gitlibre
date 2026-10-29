@@ -9,20 +9,28 @@
 - [x] Individual and workspace-wide fetch with progress events
 - [x] Automated tests against temporary local / bare remotes
 
-## Milestone 2 — multi-account foundations (in progress)
+## Milestone 2 — multi-account foundations
 
 - [x] Provider-independent account model (GitHub first; GitLab/Bitbucket/Generic fields ready)
 - [x] OS keychain storage for HTTPS tokens (`keyring`)
 - [x] Per-repository authentication identity assignment
 - [x] Separate optional commit name/email on the account (not used for auth)
 - [x] Per-invocation HTTPS Bearer auth / SSH `GIT_SSH_COMMAND` (no global credential switching)
+- [x] Detect accounts from remotes + `~/.ssh/config` + local `user.name` / `user.email`
+- [x] Apply account commit identity to commit operations (`-c user.name` / `user.email`)
 - [ ] GitHub OAuth device flow (currently PAT entry)
-- [ ] Apply commit identity to commit operations when those land
 - [ ] Validate tokens against provider APIs before save
 
-## Milestone 3 — richer workspace operations
+## Milestone 3 — local mutations & sync (in progress)
 
+- [x] Visual commit graph (topo log, lanes, refs, infinite scroll)
+- [x] Diff viewing (commit + working tree, staged/unstaged/untracked)
+- [x] Interactive staging / unstaging / discard
+- [x] Commit (+ amend) with optional account identity
+- [ ] Branch checkout / create / delete
+- [ ] Pull and push (auth-aware, with progress)
 - [ ] Pull all / push all with the same concurrency and locking model
+- [ ] Conflict detection and resolution UI
 - [ ] Workspace-wide changes view
 - [ ] Coordinated branch switching (best-effort)
 - [ ] Portable workspace definition import/export
@@ -30,16 +38,15 @@
 
 ## Milestone 4 — advanced Git UX
 
-- [ ] Visual commit graph
-- [ ] Interactive staging and commit
-- [ ] Diff viewing
-- [ ] Branch create / merge / rebase / cherry-pick
-- [ ] Conflict resolution UI
+- [ ] Branch merge / rebase / cherry-pick
+- [ ] Interactive rebase tooling
 - [ ] Worktrees, submodules, LFS awareness
+- [ ] Clone / init from the app
+- [ ] Filesystem watching for external Git changes
 
 ## Explicitly deferred / non-goals for early milestones
 
 - Subscriptions or artificial feature locks
 - Electron or a Node.js backend server
-- Embedded database for M1–M2 configuration
+- Embedded database for early configuration
 - libgit2 / `git2` (revisit only if system Git proves insufficient)

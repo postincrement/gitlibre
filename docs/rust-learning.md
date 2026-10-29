@@ -97,3 +97,9 @@ Persisted `version` lets us evolve the schema. Opening a v1 file fills defaults 
 **Where:** [`crates/gitlibre-core/src/ssh_config.rs`](../crates/gitlibre-core/src/ssh_config.rs)
 
 OpenSSH config is line-oriented with optional `Key Value` or `Key=Value` forms. We parse into structured `HostBlock` values, then resolve with OpenSSH’s first-wins rule. Prefer returning typed results (`ResolvedSshHost`) over scattering string splits through callers — same instinct as parsing into a C++ struct instead of keeping `std::string` bags.
+
+## Pathspecs and argv safety
+
+**Where:** [`crates/gitlibre-core/src/git/stage.rs`](../crates/gitlibre-core/src/git/stage.rs)
+
+User-facing paths become `git add -- <path>` arguments. Validate before spawn: reject empty/`NUL`, leading `-` (option injection), absolute paths, and `..` components. The `--` separator stops Git treating a path as a flag — same idea as not concatenating untrusted strings into a shell command.

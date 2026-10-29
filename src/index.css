@@ -1,23 +1,75 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface: #12151a;
-  --color-surface-raised: #1a1f27;
-  --color-surface-overlay: #222833;
-  --color-border: #3a4556;
-  --color-ink: #e8edf5;
-  --color-ink-muted: #9aa6b8;
-  --color-accent: #3d8bfd;
-  --color-accent-hover: #5a9dff;
-  --color-success: #3ecf8e;
-  --color-warning: #e6b84d;
-  --color-danger: #f07178;
+  --color-surface: var(--gl-surface);
+  --color-surface-raised: var(--gl-surface-raised);
+  --color-surface-overlay: var(--gl-surface-overlay);
+  --color-border: var(--gl-border);
+  --color-ink: var(--gl-ink);
+  --color-ink-muted: var(--gl-ink-muted);
+  --color-accent: var(--gl-accent);
+  --color-accent-hover: var(--gl-accent-hover);
+  --color-success: var(--gl-success);
+  --color-warning: var(--gl-warning);
+  --color-danger: var(--gl-danger);
   --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
+/* Dark (default until JS applies preference) */
+:root,
+html.dark {
+  --gl-surface: #12151a;
+  --gl-surface-raised: #1a1f27;
+  --gl-surface-overlay: #222833;
+  --gl-border: #3a4556;
+  --gl-ink: #e8edf5;
+  --gl-ink-muted: #9aa6b8;
+  --gl-accent: #3d8bfd;
+  --gl-accent-hover: #5a9dff;
+  --gl-success: #3ecf8e;
+  --gl-warning: #e6b84d;
+  --gl-danger: #f07178;
+  --gl-page-glow: #1b2433;
+  --gl-page-deep: #0e1116;
+  --gl-shadow: rgba(0, 0, 0, 0.4);
+}
+
+html.light {
+  --gl-surface: #f4f6f9;
+  --gl-surface-raised: #ffffff;
+  --gl-surface-overlay: #e8ecf2;
+  --gl-border: #c5ced9;
+  --gl-ink: #1a2332;
+  --gl-ink-muted: #5b6b7c;
+  --gl-accent: #2563eb;
+  --gl-accent-hover: #1d4ed8;
+  --gl-success: #159a5a;
+  --gl-warning: #b7811a;
+  --gl-danger: #d64545;
+  --gl-page-glow: #dfe7f2;
+  --gl-page-deep: #eef2f7;
+  --gl-shadow: rgba(26, 35, 50, 0.18);
+}
+
 html {
-  /* Force dark native form chrome (select, scrollbars, focus rings) in WKWebView. */
   color-scheme: dark;
+  /* File-list status badge colours (overridden by Settings → Colours). */
+  --status-modified: #f6c342;
+  --status-added: #14892c;
+  --status-new: #654982;
+}
+
+html.light {
+  color-scheme: light;
+}
+
+/* File-list paths: mono when enabled (default), otherwise match UI sans. */
+.font-filename {
+  font-family: var(--font-sans);
+}
+
+html.filenames-mono .font-filename {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 html,
@@ -29,7 +81,11 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background: radial-gradient(1200px 600px at 10% -10%, #1b2433 0%, var(--color-surface) 55%);
+  background: radial-gradient(
+    1200px 600px at 10% -10%,
+    var(--gl-page-glow) 0%,
+    var(--color-surface) 55%
+  );
   color: var(--color-ink);
   overflow: hidden;
 }
@@ -40,14 +96,17 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
-  color-scheme: dark;
+  color-scheme: inherit;
 }
 
 select,
 input[type="text"],
-input:not([type]) {
+input[type="password"],
+input:not([type]),
+textarea {
   appearance: none;
   background-color: var(--color-surface-overlay);
   color: var(--color-ink);
@@ -112,7 +171,7 @@ select option {
 .btn-danger {
   border-radius: 0.375rem;
   background: var(--color-danger);
-  color: #1a1010;
+  color: #fff;
   padding: 0.375rem 0.75rem;
   font-size: 0.875rem;
   font-weight: 600;
@@ -132,12 +191,25 @@ select option {
   border-color: var(--color-accent);
 }
 
-/* Startup splash — full-window welcome, Cursor-style composition */
+/* Startup splash — full-window welcome */
 .splash {
   background:
-    radial-gradient(900px 480px at 12% 18%, rgba(61, 139, 253, 0.14), transparent 60%),
-    radial-gradient(700px 420px at 88% 78%, rgba(62, 207, 142, 0.08), transparent 55%),
-    linear-gradient(165deg, #161b24 0%, var(--color-surface) 48%, #0e1116 100%);
+    radial-gradient(
+      900px 480px at 12% 18%,
+      color-mix(in srgb, var(--color-accent) 18%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      700px 420px at 88% 78%,
+      color-mix(in srgb, var(--color-success) 10%, transparent),
+      transparent 55%
+    ),
+    linear-gradient(
+      165deg,
+      var(--gl-page-glow) 0%,
+      var(--color-surface) 48%,
+      var(--gl-page-deep) 100%
+    );
   animation: splash-in 280ms ease-out;
 }
 
@@ -154,7 +226,7 @@ select option {
   left: -4%;
   width: 28rem;
   height: 28rem;
-  background: rgba(61, 139, 253, 0.18);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
   animation: splash-drift 12s ease-in-out infinite alternate;
 }
 
@@ -163,7 +235,7 @@ select option {
   bottom: -10%;
   width: 24rem;
   height: 24rem;
-  background: rgba(62, 207, 142, 0.1);
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
   animation: splash-drift 14s ease-in-out infinite alternate-reverse;
 }
 
@@ -184,7 +256,7 @@ select option {
   gap: 0.2rem;
   border-radius: 0.5rem;
   border: 1px solid var(--color-border);
-  background: rgba(34, 40, 51, 0.65);
+  background: color-mix(in srgb, var(--color-surface-overlay) 85%, transparent);
   padding: 0.75rem 1rem;
   text-align: left;
   transition:
@@ -195,7 +267,7 @@ select option {
 
 .splash-action:hover:not(:disabled) {
   border-color: var(--color-ink-muted);
-  background: rgba(34, 40, 51, 0.95);
+  background: var(--color-surface-overlay);
   transform: translateY(-1px);
 }
 
@@ -205,18 +277,18 @@ select option {
 }
 
 .splash-action-primary {
-  border-color: rgba(61, 139, 253, 0.55);
-  background: rgba(61, 139, 253, 0.14);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-overlay));
 }
 
 .splash-action-primary:hover:not(:disabled) {
   border-color: var(--color-accent);
-  background: rgba(61, 139, 253, 0.22);
+  background: color-mix(in srgb, var(--color-accent) 22%, var(--color-surface-overlay));
 }
 
 .splash-list {
-  border-top: 1px solid rgba(58, 69, 86, 0.7);
-  border-bottom: 1px solid rgba(58, 69, 86, 0.7);
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
 }
 
 .splash-row {
@@ -225,7 +297,7 @@ select option {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid rgba(58, 69, 86, 0.45);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
   background: transparent;
   padding: 0.85rem 0.35rem;
   transition: background 0.12s ease, padding-left 0.12s ease;
@@ -236,7 +308,7 @@ select option {
 }
 
 .splash-row:hover:not(:disabled) {
-  background: rgba(34, 40, 51, 0.55);
+  background: color-mix(in srgb, var(--color-surface-overlay) 70%, transparent);
   padding-left: 0.55rem;
 }
 
@@ -246,13 +318,13 @@ select option {
 }
 
 .splash-row-active {
-  background: rgba(61, 139, 253, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   padding-left: 0.55rem;
   box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .splash-row-active:hover:not(:disabled) {
-  background: rgba(61, 139, 253, 0.16);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 @keyframes splash-in {

@@ -3,10 +3,15 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 interface VerticalSplitHandleProps {
   onDrag: (deltaY: number) => void;
   onDragEnd?: () => void;
+  label?: string;
 }
 
-/** Drag handle between stacked panes. Positive deltaY grows the lower pane. */
-export function VerticalSplitHandle({ onDrag, onDragEnd }: VerticalSplitHandleProps) {
+/** Drag handle between stacked panes. Positive deltaY is a downward drag. */
+export function VerticalSplitHandle({
+  onDrag,
+  onDragEnd,
+  label = "Resize panel",
+}: VerticalSplitHandleProps) {
   const [dragging, setDragging] = useState(false);
   const startY = useRef(0);
   const onDragRef = useRef(onDrag);
@@ -53,7 +58,7 @@ export function VerticalSplitHandle({ onDrag, onDragEnd }: VerticalSplitHandlePr
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize commit details"
+      aria-label={label}
       onPointerDown={onPointerDown}
       className={[
         "z-20 h-1.5 shrink-0 cursor-row-resize touch-none",

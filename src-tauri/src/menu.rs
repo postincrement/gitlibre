@@ -3,6 +3,14 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuild
 use uuid::Uuid;
 
 pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let settings = MenuItem::with_id(
+        app,
+        "settings",
+        "Settings…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
+
     #[cfg(target_os = "macos")]
     let app_menu = Submenu::with_items(
         app,
@@ -10,6 +18,8 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -43,6 +53,7 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         Some("CmdOrCtrl+Shift+A"),
     )?;
 
+    #[cfg(target_os = "macos")]
     let file_menu = Submenu::with_items(
         app,
         "File",
@@ -52,6 +63,22 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &open_workspace,
             &PredefinedMenuItem::separator(app)?,
             &accounts,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    #[cfg(not(target_os = "macos"))]
+    let file_menu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &new_workspace,
+            &open_workspace,
+            &PredefinedMenuItem::separator(app)?,
+            &accounts,
+            &settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
@@ -100,6 +127,7 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         "new-workspace" => emit_to_focused(app, "menu-new-workspace"),
         "open-workspace" => emit_to_focused(app, "menu-open-workspace"),
         "accounts" => emit_to_focused(app, "menu-accounts"),
+        "settings" => emit_to_focused(app, "menu-settings"),
         _ => {}
     }
 }
