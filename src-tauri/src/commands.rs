@@ -614,6 +614,56 @@ pub async fn list_repository_commits(
 }
 
 #[tauri::command]
+pub async fn list_file_commits(
+    id: RepositoryId,
+    path: String,
+    start_commit: Option<String>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<gitlibre_core::CommitInfo>> {
+    let repo_path = repo_path(&state, id)?;
+    if !repo_path.exists() {
+        return Ok(Vec::new());
+    }
+    gitlibre_core::list_file_commits(
+        state.coordinator.executor(),
+        &repo_path,
+        path.trim(),
+        start_commit
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        limit,
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn blame_file(
+    id: RepositoryId,
+    path: String,
+    commit: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<gitlibre_core::BlameLine>> {
+    let repo_path = repo_path(&state, id)?;
+    if !repo_path.exists() {
+        return Ok(Vec::new());
+    }
+    gitlibre_core::blame_file(
+        state.coordinator.executor(),
+        &repo_path,
+        path.trim(),
+        commit
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
 pub async fn list_commit_files(
     id: RepositoryId,
     commit: String,
@@ -662,6 +712,88 @@ pub async fn get_commit_file_diff(
     )
     .await
     .map_err(AppErrorDto::from)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreviewDto {
+    pub mime_type: String,
+    pub base64: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreviewPairDto {
+    pub before: Option<FilePreviewDto>,
+    pub after: Option<FilePreviewDto>,
+}
+
+#[tauri::command]
+pub async fn get_commit_file_preview(
+    id: RepositoryId,
+    commit: String,
+    path: String,
+    old_path: Option<String>,
+    area: Option<ChangeArea>,
+    status: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<FilePreviewPairDto> {
+    let repo_path = repo_path(&state, id)?;
+    if !repo_path.exists() {
+        return Err(AppErrorDto::from(CoreError::path_not_found(
+            repo_path.display(),
+        )));
+    }
+    let trimmed_path = path.trim();
+    let trimmed_old = old_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let pair = gitlibre_core::get_commit_file_bytes_pair(
+        state.coordinator.executor(),
+        &repo_path,
+        commit.trim(),
+        trimmed_path,
+        trimmed_old,
+        area,
+        status.as_deref().unwrap_or("M"),
+    )
+    .await
+    .map_err(AppErrorDto::from)?;
+
+    use base64::Engine;
+    let encode = |bytes: Vec<u8>, mime_path: &str| FilePreviewDto {
+        mime_type: mime_type_for_path(mime_path),
+        base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    };
+
+    Ok(FilePreviewPairDto {
+        before: pair
+            .before
+            .map(|b| encode(b, trimmed_old.unwrap_or(trimmed_path))),
+        after: pair.after.map(|b| encode(b, trimmed_path)),
+    })
+}
+
+fn mime_type_for_path(path: &str) -> String {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "tif" | "tiff" => "image/tiff",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 #[tauri::command(rename = "stage_paths")]

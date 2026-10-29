@@ -152,6 +152,16 @@ export interface CommitFileChange {
   area?: ChangeArea | null;
 }
 
+export interface BlameLine {
+  commitId: string;
+  shortId: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  lineNumber: number;
+  content: string;
+}
+
 export interface FetchProgressEvent {
   repositoryId: RepositoryId;
   message: string;

@@ -77,6 +77,80 @@ pub async fn list_commits(
     Ok(parse_commit_log(&out.stdout_lossy()))
 }
 
+/// List commits that touched `path`, newest first (`git log --follow`).
+///
+/// When `start_commit` is set (and not the uncommitted sentinel), history is
+/// limited to that revision and its ancestors.
+pub async fn list_file_commits(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    path: &str,
+    start_commit: Option<&str>,
+    limit: Option<u32>,
+) -> CoreResult<Vec<CommitInfo>> {
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    if path.is_empty() || path.contains('\0') || path.starts_with('-') {
+        return Err(CoreError::new(
+            crate::error::ErrorCode::Internal,
+            "Invalid path",
+        ));
+    }
+
+    let limit = limit.unwrap_or(DEFAULT_COMMIT_PAGE_SIZE).clamp(1, 2000);
+    let limit_arg = format!("-{limit}");
+    let pretty = format!(
+        "%H{FIELD_SEP}%h{FIELD_SEP}%P{FIELD_SEP}%s{FIELD_SEP}%an{FIELD_SEP}%ae{FIELD_SEP}%aI{FIELD_SEP}%D{RECORD_SEP}"
+    );
+    let pretty_arg = format!("--pretty=format:{pretty}");
+
+    let start = start_commit
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != super::show::UNCOMMITTED_COMMIT_ID);
+    if let Some(rev) = start {
+        if rev.contains('\0') || rev.starts_with('-') {
+            return Err(CoreError::new(
+                crate::error::ErrorCode::Internal,
+                "Invalid commit id",
+            ));
+        }
+    }
+
+    let mut args: Vec<&str> = vec![
+        "log",
+        "--follow",
+        "--topo-order",
+        &limit_arg,
+        &pretty_arg,
+    ];
+    if let Some(rev) = start {
+        args.push(rev);
+    }
+    args.push("--");
+    args.push(path);
+
+    let out = executor.run(repo_path, &args).await?;
+
+    if !out.success() {
+        let stderr = out.stderr_lossy();
+        if stderr.contains("does not have any commits")
+            || stderr.contains("bad default revision")
+            || stderr.contains("unknown revision")
+            || stderr.contains("exists on disk, but not in")
+            || stderr.contains("did not match any file")
+        {
+            return Ok(Vec::new());
+        }
+        return Err(CoreError::process_failed(format!(
+            "git log failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    Ok(parse_commit_log(&out.stdout_lossy()))
+}
+
 fn parse_commit_log(text: &str) -> Vec<CommitInfo> {
     text.split(RECORD_SEP)
         .map(str::trim)

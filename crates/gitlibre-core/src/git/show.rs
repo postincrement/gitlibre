@@ -424,6 +424,179 @@ fn validate_path_arg(path: &str) -> CoreResult<()> {
     Ok(())
 }
 
+const MAX_FILE_PREVIEW_BYTES: usize = 25 * 1024 * 1024;
+
+/// Before/after file bytes for image (or other binary) previews.
+#[derive(Debug, Clone, Default)]
+pub struct FileBytesPair {
+    pub before: Option<Vec<u8>>,
+    pub after: Option<Vec<u8>>,
+}
+
+/// Load before and/or after bytes for `path` at `commit`.
+///
+/// `status` is the Git status letter (A/M/D/R/…) used to skip sides that
+/// do not exist (e.g. no before for added, no after for deleted).
+pub async fn get_commit_file_bytes_pair(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    commit: &str,
+    path: &str,
+    old_path: Option<&str>,
+    area: Option<ChangeArea>,
+    status: &str,
+) -> CoreResult<FileBytesPair> {
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    validate_path_arg(path)?;
+    if let Some(old) = old_path {
+        validate_path_arg(old)?;
+    }
+
+    let status_letter = status
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase())
+        .unwrap_or('M');
+    let want_before = status_letter != 'A' && area != Some(ChangeArea::Untracked);
+    let want_after = status_letter != 'D';
+    let before_path = old_path.unwrap_or(path);
+
+    let mut pair = FileBytesPair::default();
+
+    if commit == UNCOMMITTED_COMMIT_ID {
+        if want_before {
+            pair.before =
+                read_uncommitted_before_bytes(executor, repo_path, before_path, area).await;
+        }
+        if want_after {
+            pair.after =
+                read_uncommitted_after_bytes(executor, repo_path, path, area).await;
+        }
+    } else {
+        if commit.is_empty() || commit.contains('\0') || commit.starts_with('-') {
+            return Err(CoreError::new(
+                crate::error::ErrorCode::Internal,
+                "Invalid commit id",
+            ));
+        }
+        if want_before {
+            pair.before =
+                read_committed_before_bytes(executor, repo_path, commit, before_path).await;
+        }
+        if want_after {
+            pair.after = read_committed_after_bytes(executor, repo_path, commit, path).await;
+        }
+    }
+
+    if pair.before.is_none() && pair.after.is_none() {
+        return Err(CoreError::process_failed(
+            "Could not load file contents for preview",
+        ));
+    }
+
+    for side in [&pair.before, &pair.after].into_iter().flatten() {
+        if side.len() > MAX_FILE_PREVIEW_BYTES {
+            return Err(CoreError::new(
+                crate::error::ErrorCode::Internal,
+                format!("File is too large to preview ({} bytes)", side.len()),
+            ));
+        }
+    }
+
+    Ok(pair)
+}
+
+async fn read_uncommitted_before_bytes(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    path: &str,
+    area: Option<ChangeArea>,
+) -> Option<Vec<u8>> {
+    match area {
+        Some(ChangeArea::Unstaged) => {
+            // Unstaged: before = index version.
+            if let Ok(bytes) = git_show_bytes(executor, repo_path, &format!(":{path}")).await {
+                return Some(bytes);
+            }
+            git_show_bytes(executor, repo_path, &format!("HEAD:{path}"))
+                .await
+                .ok()
+        }
+        Some(ChangeArea::Staged) | None => git_show_bytes(executor, repo_path, &format!("HEAD:{path}"))
+            .await
+            .ok(),
+        Some(ChangeArea::Untracked) => None,
+    }
+}
+
+async fn read_uncommitted_after_bytes(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    path: &str,
+    area: Option<ChangeArea>,
+) -> Option<Vec<u8>> {
+    match area {
+        Some(ChangeArea::Staged) => {
+            if let Ok(bytes) = git_show_bytes(executor, repo_path, &format!(":{path}")).await {
+                return Some(bytes);
+            }
+            read_worktree_bytes(repo_path, path).await.ok()
+        }
+        Some(ChangeArea::Unstaged) | Some(ChangeArea::Untracked) | None => {
+            read_worktree_bytes(repo_path, path).await.ok()
+        }
+    }
+}
+
+async fn read_committed_before_bytes(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Option<Vec<u8>> {
+    git_show_bytes(executor, repo_path, &format!("{commit}^:{path}"))
+        .await
+        .ok()
+}
+
+async fn read_committed_after_bytes(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Option<Vec<u8>> {
+    git_show_bytes(executor, repo_path, &format!("{commit}:{path}"))
+        .await
+        .ok()
+}
+
+async fn read_worktree_bytes(repo_path: &Path, path: &str) -> CoreResult<Vec<u8>> {
+    let abs = crate::git::resolve_repo_path(repo_path, path)?;
+    if !abs.is_file() {
+        return Err(CoreError::path_not_found(abs.display()));
+    }
+    std::fs::read(&abs).map_err(|e| {
+        CoreError::process_failed(format!("Failed to read {}: {e}", abs.display()))
+    })
+}
+
+async fn git_show_bytes(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    object: &str,
+) -> CoreResult<Vec<u8>> {
+    let out = executor.run(repo_path, &["show", object]).await?;
+    if !out.success() {
+        return Err(CoreError::process_failed(format!(
+            "git show failed: {}",
+            out.stderr_lossy().trim()
+        )));
+    }
+    Ok(out.stdout)
+}
+
 fn diff_command_ok(out: &crate::git::executor::GitOutput) -> bool {
     // git diff/show exits 1 when differences are present.
     out.status == 0 || out.status == 1

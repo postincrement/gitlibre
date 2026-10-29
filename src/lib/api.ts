@@ -10,6 +10,7 @@ import type {
   RepositoryId,
   RepoStatus,
   UpdateAccountRequest,
+  BlameLine,
   BranchInfo,
   ChangeArea,
   CommitFileChange,
@@ -133,6 +134,31 @@ export async function listRepositoryCommits(
   });
 }
 
+export async function listFileCommits(
+  id: RepositoryId,
+  path: string,
+  options?: { startCommit?: string | null; limit?: number },
+): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("list_file_commits", {
+    id,
+    path,
+    startCommit: options?.startCommit ?? null,
+    limit: options?.limit ?? null,
+  });
+}
+
+export async function blameFile(
+  id: RepositoryId,
+  path: string,
+  commit?: string | null,
+): Promise<BlameLine[]> {
+  return invoke<BlameLine[]>("blame_file", {
+    id,
+    path,
+    commit: commit ?? null,
+  });
+}
+
 export async function listCommitFiles(
   id: RepositoryId,
   commit: string,
@@ -153,6 +179,34 @@ export async function getCommitFileDiff(
     path,
     oldPath: oldPath ?? null,
     area: area ?? null,
+  });
+}
+
+export interface FilePreview {
+  mimeType: string;
+  base64: string;
+}
+
+export interface FilePreviewPair {
+  before: FilePreview | null;
+  after: FilePreview | null;
+}
+
+export async function getCommitFilePreview(
+  id: RepositoryId,
+  commit: string,
+  path: string,
+  oldPath?: string | null,
+  area?: ChangeArea | null,
+  status?: string | null,
+): Promise<FilePreviewPair> {
+  return invoke<FilePreviewPair>("get_commit_file_preview", {
+    id,
+    commit,
+    path,
+    oldPath: oldPath ?? null,
+    area: area ?? null,
+    status: status ?? null,
   });
 }
 

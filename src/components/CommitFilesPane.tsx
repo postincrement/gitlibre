@@ -36,11 +36,14 @@ import {
   persistSelectedFile,
   type PersistedFileSelection,
 } from "../lib/fileSelection";
+import { isImagePath } from "../lib/imagePath";
 import {
   loadSeparateUntrackedList,
   UI_SETTINGS_CHANGED_EVENT,
 } from "../lib/uiSettings";
 import { DiffView } from "./DiffView";
+import { FileAnnotateDialog } from "./FileAnnotateDialog";
+import { FileHistoryDialog } from "./FileHistoryDialog";
 import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
 interface FileMenuState {
@@ -130,6 +133,10 @@ export function CommitFilesPane({
   const [diff, setDiff] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<{
+    beforeUrl: string | null;
+    afterUrl: string | null;
+  } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -140,6 +147,11 @@ export function CommitFilesPane({
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null);
   const [pendingFileAction, setPendingFileAction] =
     useState<PendingFileAction | null>(null);
+  const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
+  const [fileAnnotate, setFileAnnotate] = useState<{
+    path: string;
+    commit: string | null;
+  } | null>(null);
   const [filesWidth, setFilesWidth] = useState(() =>
     loadFilesListWidth(workspaceId),
   );
@@ -345,14 +357,49 @@ export function CommitFilesPane({
       setDiff("");
       setDiffError(null);
       setDiffLoading(false);
+      setImagePreview(null);
       return;
     }
+
+    const previewPath = activeFile.path;
+    const wantsImage =
+      isImagePath(previewPath) ||
+      (activeFile.oldPath != null && isImagePath(activeFile.oldPath));
 
     let cancelled = false;
     setDiffLoading(true);
     setDiffError(null);
+    setImagePreview(null);
+    setDiff("");
 
     void (async () => {
+      if (wantsImage) {
+        try {
+          const pair = await api.getCommitFilePreview(
+            repositoryId,
+            commit.id,
+            previewPath,
+            activeFile.oldPath,
+            activeFile.area ?? null,
+            activeFile.status,
+          );
+          if (cancelled) return;
+          const toUrl = (p: api.FilePreview | null) =>
+            p && p.mimeType.startsWith("image/")
+              ? `data:${p.mimeType};base64,${p.base64}`
+              : null;
+          const beforeUrl = toUrl(pair.before);
+          const afterUrl = toUrl(pair.after);
+          if (beforeUrl || afterUrl) {
+            setImagePreview({ beforeUrl, afterUrl });
+            setDiffLoading(false);
+            return;
+          }
+        } catch {
+          /* Fall through to textual diff / error below. */
+        }
+      }
+
       try {
         const text = await api.getCommitFileDiff(
           repositoryId,
@@ -534,6 +581,14 @@ export function CommitFilesPane({
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  function handleLogSelected(file: CommitFileChange) {
+    setFileHistoryPath(fileLogPath(file));
+  }
+
+  function handleAnnotateSelected(file: CommitFileChange) {
+    setFileAnnotate(fileAnnotateTarget(file, commit));
   }
 
   async function stageSelected(targets: CommitFileChange[]) {
@@ -802,6 +857,13 @@ export function CommitFilesPane({
           </div>
         ) : diffLoading ? (
           <p className="px-3 py-2 text-[12px] text-ink-muted">Loading diff…</p>
+        ) : imagePreview ? (
+          <ImagePreviewPane
+            beforeUrl={imagePreview.beforeUrl}
+            afterUrl={imagePreview.afterUrl}
+            path={activeFile.path}
+            oldPath={activeFile.oldPath}
+          />
         ) : diffError ? (
           <p className="px-3 py-2 text-[12px] text-danger">{diffError}</p>
         ) : (
@@ -948,6 +1010,16 @@ export function CommitFilesPane({
             setFileMenu(null);
             void handleCopyPaths(targets);
           }}
+          onLogSelected={() => {
+            const file = fileMenu.files[0];
+            setFileMenu(null);
+            if (file) handleLogSelected(file);
+          }}
+          onAnnotateSelected={() => {
+            const file = fileMenu.files[0];
+            setFileMenu(null);
+            if (file) handleAnnotateSelected(file);
+          }}
           onAddToIndex={() => {
             const targets = fileMenu.files;
             setFileMenu(null);
@@ -970,8 +1042,52 @@ export function CommitFilesPane({
           }}
         />
       )}
+
+      {fileHistoryPath && (
+        <FileHistoryDialog
+          workspaceId={workspaceId}
+          repositoryId={repositoryId}
+          path={fileHistoryPath}
+          startCommit={
+            commit && !isUncommittedCommit(commit) ? commit.id : null
+          }
+          onClose={() => setFileHistoryPath(null)}
+        />
+      )}
+
+      {fileAnnotate && (
+        <FileAnnotateDialog
+          workspaceId={workspaceId}
+          repositoryId={repositoryId}
+          path={fileAnnotate.path}
+          commit={fileAnnotate.commit}
+          onClose={() => setFileAnnotate(null)}
+        />
+      )}
     </div>
   );
+}
+
+function fileLogPath(file: CommitFileChange): string {
+  const letter = file.status.charAt(0).toUpperCase();
+  if (letter === "D" && file.oldPath) return file.oldPath;
+  return file.path;
+}
+
+function fileAnnotateTarget(
+  file: CommitFileChange,
+  commit: CommitInfo | null,
+): { path: string; commit: string | null } {
+  const letter = file.status.charAt(0).toUpperCase();
+  const path =
+    letter === "D" && file.oldPath ? file.oldPath : file.path;
+  if (!commit || isUncommittedCommit(commit)) {
+    // Deleted in the working tree: blame the last committed version.
+    if (letter === "D") return { path, commit: "HEAD" };
+    return { path, commit: null };
+  }
+  if (letter === "D") return { path, commit: `${commit.id}^` };
+  return { path, commit: commit.id };
 }
 
 function FileSection({
@@ -1094,6 +1210,8 @@ function FileContextMenu({
   onOpen,
   onReveal,
   onCopyPath,
+  onLogSelected,
+  onAnnotateSelected,
   onAddToIndex,
   onUnstage,
   onRemove,
@@ -1109,6 +1227,8 @@ function FileContextMenu({
   onOpen: () => void;
   onReveal: () => void;
   onCopyPath: () => void;
+  onLogSelected: () => void;
+  onAnnotateSelected: () => void;
   onAddToIndex: () => void;
   onUnstage: () => void;
   onRemove: () => void;
@@ -1121,6 +1241,11 @@ function FileContextMenu({
     files.length > 0 && files.every((f) => f.area !== "staged");
   const allTracked =
     files.length > 0 && files.every((f) => f.area !== "untracked");
+  /** History commit files have no area; treat them as tracked. */
+  const showHistoryActions =
+    !multi &&
+    files.length === 1 &&
+    files[0]!.area !== "untracked";
   const showAdd = allowMutations && (multi || allNotStaged);
   const showUnstage = allowMutations && (multi || allStaged);
   const showStopTracking = allowMutations && allTracked;
@@ -1174,6 +1299,17 @@ function FileContextMenu({
       <MenuItem disabled={busy} onClick={onCopyPath}>
         Copy Path to Clipboard
       </MenuItem>
+      {showHistoryActions && (
+        <>
+          <div className="my-1 border-t border-border" role="separator" />
+          <MenuItem disabled={busy} onClick={onLogSelected}>
+            Log Selected
+          </MenuItem>
+          <MenuItem disabled={busy} onClick={onAnnotateSelected}>
+            Annotate Selected
+          </MenuItem>
+        </>
+      )}
       {allowMutations && (
         <>
           <div className="my-1 border-t border-border" role="separator" />
@@ -1435,6 +1571,57 @@ function FilesSplitHandle({
         dragging ? "bg-accent/70" : "bg-border hover:bg-accent/50",
       ].join(" ")}
     />
+  );
+}
+
+function ImagePreviewPane({
+  beforeUrl,
+  afterUrl,
+  path,
+  oldPath,
+}: {
+  beforeUrl: string | null;
+  afterUrl: string | null;
+  path: string;
+  oldPath?: string | null;
+}) {
+  const both = Boolean(beforeUrl && afterUrl);
+  return (
+    <div
+      className={[
+        "flex h-full min-h-0 gap-2 overflow-hidden bg-surface/30 p-3",
+        both ? "flex-row" : "flex-col",
+      ].join(" ")}
+    >
+      {beforeUrl && (
+        <figure className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+          <figcaption className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+            Before
+          </figcaption>
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+            <img
+              src={beforeUrl}
+              alt={oldPath ?? path}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+        </figure>
+      )}
+      {afterUrl && (
+        <figure className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+          <figcaption className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+            {beforeUrl ? "After" : "Image"}
+          </figcaption>
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+            <img
+              src={afterUrl}
+              alt={path}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+        </figure>
+      )}
+    </div>
   );
 }
 

@@ -7,9 +7,20 @@ interface ModalProps {
   onClose?: () => void;
   /** When false, Escape and backdrop click do not close the dialog. Default true. */
   dismissible?: boolean;
+  /** Extra classes for the dialog panel (e.g. wider layouts). */
+  panelClassName?: string;
+  /** Extra classes for the body wrapper around children. */
+  bodyClassName?: string;
 }
 
-export function Modal({ title, children, onClose, dismissible = true }: ModalProps) {
+export function Modal({
+  title,
+  children,
+  onClose,
+  dismissible = true,
+  panelClassName,
+  bodyClassName,
+}: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -34,12 +45,21 @@ export function Modal({ title, children, onClose, dismissible = true }: ModalPro
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-md rounded-lg border border-border bg-surface-raised shadow-xl shadow-black/40"
+        className={[
+          "flex w-full flex-col rounded-lg border border-border bg-surface-raised shadow-xl shadow-black/40",
+          panelClassName ?? "max-w-md",
+        ].join(" ")}
       >
-        <div className="border-b border-border px-4 py-3 text-base font-semibold text-ink">
+        <div className="shrink-0 border-b border-border px-4 py-3 text-base font-semibold text-ink">
           {title}
         </div>
-        <div className="p-4">{children}</div>
+        <div
+          className={["min-h-0 flex-1 p-4", bodyClassName]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
