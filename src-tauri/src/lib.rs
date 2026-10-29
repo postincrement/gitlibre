@@ -77,6 +77,7 @@ pub fn run() {
             commands::commit_repository,
             commands::list_workspace_statuses,
             commands::fetch_repository,
+            commands::pull_repository,
             commands::fetch_workspace,
         ])
         .run(tauri::generate_context!())

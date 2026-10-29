@@ -9,6 +9,7 @@ pub mod fetch;
 pub mod git;
 pub mod ids;
 pub mod models;
+pub mod pull;
 pub mod secrets;
 pub mod ssh_config;
 pub mod store;
@@ -20,6 +21,7 @@ pub use detect::{
 };
 pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
+pub use pull::{list_conflicted_paths, PullOutcome};
 pub use git::{
     blame_file, commit_index, discard_paths, get_commit_file_bytes_pair, get_commit_file_diff,
     get_commit_file_diff_with_old_path, inspect_repository, list_commit_files, list_commits,

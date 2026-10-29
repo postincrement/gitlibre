@@ -179,3 +179,12 @@ export interface WorkspaceFetchFinishedEvent {
   succeeded: number;
   failed: number;
 }
+
+export interface PullResult {
+  repositoryId: RepositoryId;
+  success: boolean;
+  summary: string;
+  hasConflicts: boolean;
+  conflictedPaths: string[];
+  error: AppError | null;
+}

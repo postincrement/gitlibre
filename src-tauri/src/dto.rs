@@ -226,3 +226,14 @@ pub struct WorkspaceFetchFinishedEvent {
     pub succeeded: usize,
     pub failed: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullResult {
+    pub repository_id: RepositoryId,
+    pub success: bool,
+    pub summary: String,
+    pub has_conflicts: bool,
+    pub conflicted_paths: Vec<String>,
+    pub error: Option<AppErrorDto>,
+}

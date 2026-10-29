@@ -101,7 +101,7 @@ interface CommitFilesPaneProps {
   files: CommitFileChange[];
   loading: boolean;
   error: string | null;
-  /** Called after stage / unstage / discard / commit so the parent can refresh. */
+  /** Called after stage / unstage / commit so the parent can refresh. */
   onWorkingTreeChanged?: () => void;
   /** Called after a successful commit (history should reload). */
   onCommitted?: () => void;
@@ -141,9 +141,6 @@ export function CommitFilesPane({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
-  const [pendingDiscard, setPendingDiscard] = useState<CommitFileChange | null>(
-    null,
-  );
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null);
   const [pendingFileAction, setPendingFileAction] =
     useState<PendingFileAction | null>(null);
@@ -250,7 +247,6 @@ export function CommitFilesPane({
     setDiff("");
     setDiffError(null);
     setActionError(null);
-    setPendingDiscard(null);
     setFileMenu(null);
     setPendingFileAction(null);
     if (!commit || !isUncommittedCommit(commit)) {
@@ -691,9 +687,6 @@ export function CommitFilesPane({
                         }
                       : undefined
                   }
-                  discardAction={{
-                    onClick: (file) => setPendingDiscard(file),
-                  }}
                 />
               </div>
               <VerticalSplitHandle
@@ -731,9 +724,6 @@ export function CommitFilesPane({
                         }
                       : undefined
                   }
-                  discardAction={{
-                    onClick: (file) => setPendingDiscard(file),
-                  }}
                 />
                 {separateUntracked && (
                   <FileSection
@@ -765,9 +755,6 @@ export function CommitFilesPane({
                           }
                         : undefined
                     }
-                    discardAction={{
-                      onClick: (file) => setPendingDiscard(file),
-                    }}
                   />
                 )}
               </div>
@@ -872,43 +859,6 @@ export function CommitFilesPane({
           </div>
         )}
       </div>
-
-      {pendingDiscard && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-lg border border-border bg-surface-raised p-4">
-            <h3 className="mb-2 font-semibold">Discard changes</h3>
-            <p className="mb-4 text-sm text-ink-muted">
-              Discard {pendingDiscard.area ?? "local"} changes to{" "}
-              <span className="font-filename text-ink">{pendingDiscard.path}</span>?
-              This cannot be undone.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setPendingDiscard(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn-danger"
-                disabled={busy}
-                onClick={() => {
-                  const file = pendingDiscard;
-                  setPendingDiscard(null);
-                  if (!file?.area) return;
-                  void runMutation(() =>
-                    api.discardPaths(repositoryId, [file.path], file.area as ChangeArea),
-                  );
-                }}
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {pendingFileAction && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
@@ -1101,7 +1051,6 @@ function FileSection({
   onContextMenu,
   onToggleStaged,
   bulkAction,
-  discardAction,
 }: {
   title: string;
   files: CommitFileChange[];
@@ -1114,7 +1063,6 @@ function FileSection({
   onContextMenu: (e: ReactMouseEvent, file: CommitFileChange) => void;
   onToggleStaged: (file: CommitFileChange, checked: boolean) => void;
   bulkAction?: { label: string; onClick: () => void };
-  discardAction: { onClick: (file: CommitFileChange) => void };
 }) {
   return (
     <div className="border-b border-border/60 last:border-b-0">
@@ -1144,7 +1092,7 @@ function FileSection({
               <li
                 key={`${file.area}:${file.status}:${file.oldPath ?? ""}:${file.path}`}
                 className={[
-                  "group flex items-center gap-1 pr-1",
+                  "flex items-center gap-1 pr-1",
                   isSelected ? "bg-accent/20" : "hover:bg-surface-overlay/60",
                 ].join(" ")}
                 onContextMenu={(e) => onContextMenu(e, file)}
@@ -1181,14 +1129,6 @@ function FileSection({
                   <span className="font-filename min-w-0 truncate text-ink">
                     {file.path}
                   </span>
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-danger opacity-0 hover:bg-danger/10 group-hover:opacity-100 disabled:opacity-40"
-                  disabled={busy}
-                  onClick={() => discardAction.onClick(file)}
-                >
-                  Discard
                 </button>
               </li>
             );

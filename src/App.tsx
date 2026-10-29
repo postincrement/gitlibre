@@ -481,6 +481,31 @@ export default function App() {
     }
   }
 
+  async function handlePullOne() {
+    if (!selectedId) return;
+    try {
+      setError(null);
+      setBusy(true);
+      const result = await api.pullRepository(selectedId);
+      if (result.hasConflicts) {
+        const preview = result.conflictedPaths.slice(0, 5).join(", ");
+        const more =
+          result.conflictedPaths.length > 5
+            ? ` (+${result.conflictedPaths.length - 5} more)`
+            : "";
+        setError(
+          `Pull finished with conflicts${preview ? `: ${preview}${more}` : "."} Resolve them before continuing.`,
+        );
+      } else if (!result.success) {
+        setError(result.error?.message ?? result.summary);
+      }
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleFetchOne() {
     if (!selectedId) return;
     try {
@@ -593,6 +618,7 @@ export default function App() {
         canFetchRepo={Boolean(selected?.available)}
         repoFetching={Boolean(selected?.isFetching)}
         busy={busy}
+        onPullRepo={handlePullOne}
         onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}
       />

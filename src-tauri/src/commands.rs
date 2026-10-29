@@ -1,7 +1,7 @@
 use crate::dto::{
     AccountDto, AddRepositoryResult, AppErrorDto, AppSnapshot, CmdResult, CreateAccountRequest,
-    DetectedAccountDto, FetchFinishedEvent, FetchProgressEvent, RepoStatusDto, RepositoryDto,
-    UpdateAccountRequest, WorkspaceDto, WorkspaceFetchFinishedEvent,
+    DetectedAccountDto, FetchFinishedEvent, FetchProgressEvent, PullResult, RepoStatusDto,
+    RepositoryDto, UpdateAccountRequest, WorkspaceDto, WorkspaceFetchFinishedEvent,
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
@@ -1157,6 +1157,72 @@ pub async fn fetch_repository(
     );
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pull_repository(
+    id: RepositoryId,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<PullResult> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    let auth = resolve_auth_for_repo(&state, id)?;
+
+    {
+        let mut live = lock_live(&state)?;
+        let entry = live.entry(id).or_default();
+        entry.is_fetching = true;
+        entry.last_error = None;
+    }
+
+    let app_progress = app.clone();
+    let outcome = state
+        .coordinator
+        .pull_one_with_auth(id, &path, auth, |p| {
+            let _ = app_progress.emit(
+                "repo-fetch-progress",
+                FetchProgressEvent {
+                    repository_id: p.repository_id,
+                    message: p.message,
+                },
+            );
+        })
+        .await;
+
+    {
+        let mut live = lock_live(&state)?;
+        let entry = live.entry(id).or_default();
+        entry.is_fetching = false;
+        entry.last_fetch_summary = Some(outcome.summary.clone());
+        entry.last_error = outcome.error.as_ref().map(|e| e.message.clone());
+    }
+
+    let error = outcome.error.map(AppErrorDto::from);
+    let _ = app.emit(
+        "repo-fetch-finished",
+        FetchFinishedEvent {
+            repository_id: outcome.repository_id,
+            success: outcome.success,
+            summary: outcome.summary.clone(),
+            error: error.clone(),
+        },
+    );
+
+    Ok(PullResult {
+        repository_id: outcome.repository_id,
+        success: outcome.success,
+        summary: outcome.summary,
+        has_conflicts: outcome.has_conflicts,
+        conflicted_paths: outcome.conflicted_paths,
+        error,
+    })
 }
 
 #[tauri::command]

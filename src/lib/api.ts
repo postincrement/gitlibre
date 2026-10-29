@@ -18,6 +18,7 @@ import type {
   Workspace,
   WorkspaceFetchFinishedEvent,
   WorkspaceId,
+  PullResult,
 } from "../types/models";
 
 export async function getSnapshot(): Promise<AppSnapshot> {
@@ -288,6 +289,10 @@ export async function listWorkspaceStatuses(
 
 export async function fetchRepository(id: RepositoryId): Promise<void> {
   return invoke<void>("fetch_repository", { id });
+}
+
+export async function pullRepository(id: RepositoryId): Promise<PullResult> {
+  return invoke<PullResult>("pull_repository", { id });
 }
 
 export async function fetchWorkspace(
