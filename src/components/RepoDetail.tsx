@@ -3,15 +3,21 @@ import type {
   BranchInfo,
   CommitFileChange,
   CommitInfo,
+  RepositoryId,
   RepoStatus,
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import type { ContentViewMode } from "../lib/contentView";
 import {
   UNCOMMITTED_COMMIT_ID,
   isUncommittedCommit,
   withUncommittedPseudoCommit,
 } from "../lib/commitGraphLayout";
+import {
+  loadSelectedCommit,
+  persistSelectedCommit,
+} from "../lib/commitSelection";
 import {
   clampDetailPaneHeight,
   loadDetailPaneHeight,
@@ -23,10 +29,22 @@ import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
 const COMMIT_PAGE_SIZE = 100;
 
+const UNCOMMITTED_COMMIT: CommitInfo = {
+  id: UNCOMMITTED_COMMIT_ID,
+  shortId: "•••••••",
+  parents: [],
+  subject: "Uncommitted changes",
+  authorName: "",
+  authorEmail: "",
+  authoredAt: "",
+  refs: [],
+};
+
 interface RepoDetailProps {
   workspaceId: WorkspaceId;
   status: RepoStatus | null;
   branches: BranchInfo[];
+  contentView: ContentViewMode;
   /** Refresh status (and sidebar dirty indicators) after local mutations. */
   onWorkingTreeChanged?: () => void;
 }
@@ -35,6 +53,7 @@ export function RepoDetail({
   workspaceId,
   status,
   branches,
+  contentView,
   onWorkingTreeChanged,
 }: RepoDetailProps) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
@@ -51,9 +70,15 @@ export function RepoDetail({
   );
   /** True only when porcelain reports at least one changed path. */
   const [hasUncommittedFiles, setHasUncommittedFiles] = useState(false);
+  const [statusFiles, setStatusFiles] = useState<CommitFileChange[]>([]);
+  const [statusFilesLoading, setStatusFilesLoading] = useState(false);
+  const [statusFilesError, setStatusFilesError] = useState<string | null>(null);
   const loadingMoreRef = useRef(false);
   const splitRef = useRef<HTMLDivElement>(null);
   const detailHeightRef = useRef(detailHeight);
+  /** Repo id whose saved commit selection still needs applying. */
+  const pendingRestoreRepoRef = useRef<RepositoryId | null>(null);
+  const [workingTreeReady, setWorkingTreeReady] = useState(false);
 
   useEffect(() => {
     detailHeightRef.current = detailHeight;
@@ -63,11 +88,20 @@ export function RepoDetail({
     setDetailHeight(loadDetailPaneHeight(workspaceId));
   }, [workspaceId]);
 
+  const selectCommit = useCallback(
+    (commit: CommitInfo | null) => {
+      setSelectedCommit(commit);
+      if (status?.repositoryId) {
+        persistSelectedCommit(status.repositoryId, commit?.id ?? null);
+      }
+    },
+    [status?.repositoryId],
+  );
+
   const loadInitial = useCallback(async (repositoryId: RepoStatus["repositoryId"]) => {
     setLoading(true);
     setError(null);
     setHasMore(false);
-    setSelectedCommit(null);
     setFiles([]);
     setFilesError(null);
     try {
@@ -122,28 +156,54 @@ export function RepoDetail({
       setHasMore(false);
       setSelectedCommit(null);
       setFiles([]);
+      setWorkingTreeReady(false);
+      pendingRestoreRepoRef.current = null;
       return;
     }
 
+    pendingRestoreRepoRef.current = status.repositoryId;
+    setWorkingTreeReady(false);
+    setSelectedCommit(null);
+    setFiles([]);
     void loadInitial(status.repositoryId);
   }, [status?.repositoryId, status?.available, status?.lastFetchSummary, loadInitial]);
 
   useEffect(() => {
     if (!status?.available) {
       setHasUncommittedFiles(false);
+      setStatusFiles([]);
+      setStatusFilesError(null);
+      setStatusFilesLoading(false);
+      setWorkingTreeReady(false);
       return;
     }
 
     let cancelled = false;
+    if (contentView === "fileStatus") {
+      setStatusFilesLoading(true);
+      setStatusFilesError(null);
+    }
+
     void (async () => {
       try {
         const list = await api.listCommitFiles(
           status.repositoryId,
           UNCOMMITTED_COMMIT_ID,
         );
-        if (!cancelled) setHasUncommittedFiles(list.length > 0);
-      } catch {
-        if (!cancelled) setHasUncommittedFiles(false);
+        if (!cancelled) {
+          setHasUncommittedFiles(list.length > 0);
+          setStatusFiles(list);
+          setStatusFilesLoading(false);
+          setWorkingTreeReady(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setHasUncommittedFiles(false);
+          setStatusFiles([]);
+          setStatusFilesError(e instanceof Error ? e.message : String(e));
+          setStatusFilesLoading(false);
+          setWorkingTreeReady(true);
+        }
       }
     })();
 
@@ -160,12 +220,82 @@ export function RepoDetail({
     status?.workingTree?.untracked,
     status?.workingTree?.renamed,
     status?.workingTree?.conflicted,
+    contentView,
   ]);
 
   const graphCommits = useMemo(
     () => withUncommittedPseudoCommit(commits, hasUncommittedFiles),
     [commits, hasUncommittedFiles],
   );
+
+  // Restore persisted commit selection after history + working tree are ready.
+  useEffect(() => {
+    if (!status?.available || loading || !workingTreeReady) return;
+    if (pendingRestoreRepoRef.current !== status.repositoryId) return;
+
+    pendingRestoreRepoRef.current = null;
+    const savedId = loadSelectedCommit(status.repositoryId);
+
+    if (savedId === UNCOMMITTED_COMMIT_ID) {
+      const uncommitted = graphCommits.find(isUncommittedCommit);
+      if (uncommitted) {
+        setSelectedCommit(uncommitted);
+        return;
+      }
+    } else if (savedId) {
+      const found = graphCommits.find(
+        (c) => c.id === savedId || c.id.startsWith(savedId),
+      );
+      if (found) {
+        setSelectedCommit(found);
+        return;
+      }
+      setSelectedCommit({
+        id: savedId,
+        shortId: savedId.slice(0, 7),
+        parents: [],
+        subject: savedId.slice(0, 7),
+        authorName: "",
+        authorEmail: "",
+        authoredAt: "",
+        refs: [],
+      });
+      return;
+    }
+
+    if (contentView === "history") {
+      const uncommitted = graphCommits.find(isUncommittedCommit);
+      if (uncommitted) {
+        setSelectedCommit(uncommitted);
+        persistSelectedCommit(status.repositoryId, uncommitted.id);
+      }
+    }
+  }, [
+    status?.available,
+    status?.repositoryId,
+    loading,
+    workingTreeReady,
+    graphCommits,
+    contentView,
+  ]);
+
+  // When entering History with nothing selected, prefer Uncommitted changes.
+  useEffect(() => {
+    if (contentView !== "history") return;
+    if (selectedCommit) return;
+    if (loading || !workingTreeReady) return;
+    if (pendingRestoreRepoRef.current) return;
+    const uncommitted = graphCommits.find(isUncommittedCommit);
+    if (!uncommitted) return;
+    selectCommit(uncommitted);
+  }, [
+    contentView,
+    selectedCommit,
+    loading,
+    workingTreeReady,
+    graphCommits,
+    selectCommit,
+  ]);
 
   useEffect(() => {
     // Only auto-clear the synthetic uncommitted row when it disappears from the graph.
@@ -175,7 +305,10 @@ export function RepoDetail({
     setSelectedCommit(null);
     setFiles([]);
     setFilesError(null);
-  }, [graphCommits, selectedCommit]);
+    if (status?.repositoryId) {
+      persistSelectedCommit(status.repositoryId, null);
+    }
+  }, [graphCommits, selectedCommit, status?.repositoryId]);
 
   useEffect(() => {
     if (!status?.available || !selectedCommit) {
@@ -243,6 +376,7 @@ export function RepoDetail({
         UNCOMMITTED_COMMIT_ID,
       );
       setHasUncommittedFiles(list.length > 0);
+      setStatusFiles(list);
       if (selectedCommit?.id === UNCOMMITTED_COMMIT_ID) {
         setFiles(list);
       }
@@ -259,10 +393,14 @@ export function RepoDetail({
 
   const refreshAfterCommit = useCallback(async () => {
     if (!status?.available) return;
+    persistSelectedCommit(status.repositoryId, null);
+    pendingRestoreRepoRef.current = status.repositoryId;
+    setWorkingTreeReady(false);
     await loadInitial(status.repositoryId);
     setSelectedCommit(null);
     setFiles([]);
     await refreshWorkingTree();
+    setWorkingTreeReady(true);
   }, [status?.available, status?.repositoryId, loadInitial, refreshWorkingTree]);
 
   const selectCommitById = useCallback(
@@ -271,11 +409,11 @@ export function RepoDetail({
         (c) => c.id === commitId || c.id.startsWith(commitId),
       );
       if (found) {
-        setSelectedCommit(found);
+        selectCommit(found);
         return;
       }
       // Parent may be outside the loaded page — still open it by id.
-      setSelectedCommit({
+      selectCommit({
         id: commitId,
         shortId: commitId.slice(0, 7),
         parents: [],
@@ -286,7 +424,7 @@ export function RepoDetail({
         refs: [],
       });
     },
-    [graphCommits],
+    [graphCommits, selectCommit],
   );
 
   if (!status) {
@@ -308,6 +446,34 @@ export function RepoDetail({
     );
   }
 
+  if (contentView === "fileStatus") {
+    return (
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CommitFilesPane
+          workspaceId={workspaceId}
+          repositoryId={status.repositoryId}
+          commit={UNCOMMITTED_COMMIT}
+          files={statusFiles}
+          loading={statusFilesLoading}
+          error={statusFilesError}
+          onWorkingTreeChanged={() => void refreshWorkingTree()}
+          onCommitted={() => void refreshAfterCommit()}
+        />
+      </main>
+    );
+  }
+
+  if (contentView === "search") {
+    return (
+      <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+        <p className="text-sm font-medium text-ink">Search</p>
+        <p className="max-w-sm text-sm text-ink-muted">
+          Commit and file search will appear here.
+        </p>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div ref={splitRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -322,7 +488,7 @@ export function RepoDetail({
             hasMore={hasMore}
             error={error}
             onLoadMore={loadMore}
-            onSelectCommit={setSelectedCommit}
+            onSelectCommit={selectCommit}
           />
         </div>
         <VerticalSplitHandle onDrag={onSplitDrag} onDragEnd={onSplitDragEnd} />
@@ -337,6 +503,7 @@ export function RepoDetail({
             files={files}
             loading={filesLoading}
             error={filesError}
+            hideCommitComposer
             onWorkingTreeChanged={() => void refreshWorkingTree()}
             onCommitted={() => void refreshAfterCommit()}
             onSelectCommitId={selectCommitById}

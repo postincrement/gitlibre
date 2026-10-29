@@ -4,6 +4,11 @@ const SIDEBAR_WIDTH_KEY = "gitlibre.sidebarWidth.byWorkspace";
 const SIDEBAR_WIDTH_LEGACY_KEY = "gitlibre.sidebarWidth";
 const REPO_LIST_HEIGHT_KEY = "gitlibre.sidebarRepoListHeight.byWorkspace";
 const REPO_LIST_HEIGHT_LEGACY_KEY = "gitlibre.sidebarRepoListHeight";
+const REPOS_PANEL_STYLE_KEY = "gitlibre.reposPanelStyle.byWorkspace";
+const REPOS_PANEL_STYLE_LEGACY_KEY = "gitlibre.reposPanelStyle";
+
+export type ReposPanelStyle = "list" | "dropdown";
+export const DEFAULT_REPOS_PANEL_STYLE: ReposPanelStyle = "list";
 
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 560;
@@ -117,6 +122,58 @@ export function clampRepoListHeight(
 ): number {
   const max = Math.max(MIN_REPO_LIST_HEIGHT, containerHeight - 160);
   return Math.min(max, Math.max(MIN_REPO_LIST_HEIGHT, height));
+}
+
+function readStyleMap(): Record<string, ReposPanelStyle> {
+  try {
+    const raw = localStorage.getItem(REPOS_PANEL_STYLE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    const out: Record<string, ReposPanelStyle> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (value === "list" || value === "dropdown") out[id] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeStyleMap(all: Record<string, ReposPanelStyle>) {
+  try {
+    localStorage.setItem(REPOS_PANEL_STYLE_KEY, JSON.stringify(all));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadReposPanelStyle(
+  workspaceId: WorkspaceId,
+  fallback: ReposPanelStyle = DEFAULT_REPOS_PANEL_STYLE,
+): ReposPanelStyle {
+  const all = readStyleMap();
+  const existing = all[workspaceId];
+  if (existing) return existing;
+  try {
+    const legacy = localStorage.getItem(REPOS_PANEL_STYLE_LEGACY_KEY);
+    if (legacy === "list" || legacy === "dropdown") {
+      all[workspaceId] = legacy;
+      writeStyleMap(all);
+      return legacy;
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+export function persistReposPanelStyle(
+  workspaceId: WorkspaceId,
+  style: ReposPanelStyle,
+): void {
+  const all = readStyleMap();
+  all[workspaceId] = style;
+  writeStyleMap(all);
 }
 
 export { MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MIN_REPO_LIST_HEIGHT };

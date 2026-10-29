@@ -23,6 +23,11 @@ import {
   onWorkspaceFetchFinished,
 } from "./lib/events";
 import {
+  loadContentView,
+  persistContentView,
+  type ContentViewMode,
+} from "./lib/contentView";
+import {
   loadSelectedRepository,
   persistSelectedRepository,
 } from "./lib/workspaceSelection";
@@ -65,6 +70,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<RepositoryId | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [contentView, setContentView] = useState<ContentViewMode>("history");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -171,11 +177,22 @@ export default function App() {
       await refreshSnapshot();
       setWindowWorkspaceId(id);
       setSidebarWidth(loadSidebarWidth(id));
+      setContentView(loadContentView(id));
       setShowSplash(false);
       await restoreWorkspaceWindowGeometry(id);
       await refreshStatuses(id);
     },
     [refreshSnapshot, refreshStatuses],
+  );
+
+  const handleContentViewChange = useCallback(
+    (mode: ContentViewMode) => {
+      setContentView(mode);
+      if (windowWorkspaceIdRef.current) {
+        persistContentView(windowWorkspaceIdRef.current, mode);
+      }
+    },
+    [],
   );
 
   // Persist window size / position for the bound workspace.
@@ -591,11 +608,13 @@ export default function App() {
           selectedId={selectedId}
           branches={branches}
           width={sidebarWidth}
+          contentView={contentView}
           busy={busy}
           onSelect={(id) => {
             if (windowWorkspaceId) selectRepository(windowWorkspaceId, id);
             else setSelectedId(id);
           }}
+          onContentViewChange={handleContentViewChange}
           onAddRepository={handleAddRepository}
           onManageAccounts={(id) => setAccountsRepoId(id)}
           onRemoveRepository={(id) => setPendingRemoveId(id)}
@@ -609,6 +628,7 @@ export default function App() {
           workspaceId={windowWorkspaceId}
           status={selected}
           branches={branches}
+          contentView={contentView}
           onWorkingTreeChanged={() => {
             if (windowWorkspaceId) void refreshStatuses(windowWorkspaceId);
             if (selectedId) void refreshBranches(selectedId);

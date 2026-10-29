@@ -40,6 +40,8 @@ const STATUS_COLOR_FIELDS: {
   { key: "modified", label: "Modified", letter: "M" },
   { key: "added", label: "Added", letter: "A" },
   { key: "new", label: "New", letter: "U" },
+  { key: "deleted", label: "Deleted", letter: "D" },
+  { key: "repoChanges", label: "Repo changes badge", letter: "3" },
 ];
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {

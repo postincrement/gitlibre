@@ -353,19 +353,14 @@ export function CommitGraph({
                   <RefChips refs={row.commit.refs} behindByBranch={behindByBranch} />
                   <span
                     className={[
-                      "min-w-0 truncate",
-                      uncommitted ? "font-medium text-warning" : "text-ink",
+                      "min-w-0 truncate text-ink",
+                      uncommitted ? "font-bold" : "",
                     ].join(" ")}
                   >
                     {row.commit.subject}
                   </span>
                 </div>
-                <div
-                  className="truncate px-2 font-mono tabular-nums"
-                  style={{
-                    color: uncommitted ? "var(--color-warning)" : laneColor(row.lane),
-                  }}
-                >
+                <div className="truncate px-2 font-mono tabular-nums text-ink-muted">
                   {uncommitted ? "—" : row.commit.shortId}
                 </div>
                 <div className="truncate px-2 text-ink-muted">

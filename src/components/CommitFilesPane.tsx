@@ -32,6 +32,11 @@ import {
   persistStagedFilesPaneHeight,
 } from "../lib/detailSplit";
 import {
+  loadSelectedFile,
+  persistSelectedFile,
+  type PersistedFileSelection,
+} from "../lib/fileSelection";
+import {
   loadSeparateUntrackedList,
   UI_SETTINGS_CHANGED_EVENT,
 } from "../lib/uiSettings";
@@ -65,6 +70,27 @@ function sameFile(a: CommitFileChange, b: CommitFileChange): boolean {
   return fileKey(a) === fileKey(b);
 }
 
+function matchesPersisted(
+  file: CommitFileChange,
+  saved: PersistedFileSelection,
+): boolean {
+  return (
+    file.path === saved.path &&
+    (file.area ?? null) === (saved.area ?? null) &&
+    file.status === saved.status &&
+    (file.oldPath ?? null) === (saved.oldPath ?? null)
+  );
+}
+
+function toPersisted(file: CommitFileChange): PersistedFileSelection {
+  return {
+    path: file.path,
+    area: file.area ?? null,
+    status: file.status,
+    oldPath: file.oldPath ?? null,
+  };
+}
+
 interface CommitFilesPaneProps {
   workspaceId: WorkspaceId;
   repositoryId: RepositoryId;
@@ -78,6 +104,11 @@ interface CommitFilesPaneProps {
   onCommitted?: () => void;
   /** Select another commit (e.g. parent hash link). */
   onSelectCommitId?: (commitId: string) => void;
+  /**
+   * When true, hide the commit message / amend form for uncommitted changes
+   * (History mode). Commit info for real commits is unaffected.
+   */
+  hideCommitComposer?: boolean;
 }
 
 export function CommitFilesPane({
@@ -90,6 +121,7 @@ export function CommitFilesPane({
   onWorkingTreeChanged,
   onCommitted,
   onSelectCommitId,
+  hideCommitComposer = false,
 }: CommitFilesPaneProps) {
   /** All selected file rows (multi-select). */
   const [selection, setSelection] = useState<CommitFileChange[]>([]);
@@ -124,8 +156,15 @@ export function CommitFilesPane({
   const selectionAnchorRef = useRef<CommitFileChange | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  /** Pending restore after commit change; `undefined` means restore already applied. */
+  const pendingFileRestoreRef = useRef<
+    PersistedFileSelection | null | undefined
+  >(undefined);
+  /** True once `loading` has been true for the current commit (avoids settling empty too early). */
+  const sawFilesLoadingRef = useRef(false);
 
   const uncommitted = commit ? isUncommittedCommit(commit) : false;
+  const showBottomMeta = !uncommitted || !hideCommitComposer;
   const [separateUntracked, setSeparateUntracked] = useState(() =>
     loadSeparateUntrackedList(),
   );
@@ -206,11 +245,52 @@ export function CommitFilesPane({
       setMessage("");
       setAmend(false);
     }
-  }, [commit?.id]);
+    // Only Uncommitted changes restores a persisted file; real commits always
+    // start on the first file.
+    pendingFileRestoreRef.current = commit
+      ? isUncommittedCommit(commit)
+        ? loadSelectedFile(repositoryId, commit.id)
+        : null
+      : null;
+    sawFilesLoadingRef.current = false;
+  }, [commit?.id, repositoryId]);
 
   useEffect(() => {
+    if (!commit) return;
+
+    if (pendingFileRestoreRef.current !== undefined) {
+      if (loading) {
+        sawFilesLoadingRef.current = true;
+        return;
+      }
+      if (selectableFiles.length > 0) {
+        const saved = pendingFileRestoreRef.current;
+        pendingFileRestoreRef.current = undefined;
+        const restored =
+          uncommitted && saved != null
+            ? (selectableFiles.find((f) => matchesPersisted(f, saved)) ?? null)
+            : null;
+        const next = restored ?? selectableFiles[0]!;
+        setSelection([next]);
+        setActiveFile(next);
+        selectionAnchorRef.current = next;
+        if (uncommitted) {
+          persistSelectedFile(repositoryId, commit.id, toPersisted(next));
+        }
+        return;
+      }
+      if (!sawFilesLoadingRef.current) {
+        // Empty list before the first load cycle — wait for parent fetch.
+        return;
+      }
+      pendingFileRestoreRef.current = undefined;
+      setSelection([]);
+      setActiveFile(null);
+      return;
+    }
+
     const nextSelection = selection
-      .map((selected) => files.find((f) => sameFile(f, selected)))
+      .map((selected) => selectableFiles.find((f) => sameFile(f, selected)))
       .filter((f): f is CommitFileChange => f != null);
     if (
       nextSelection.length !== selection.length ||
@@ -219,20 +299,46 @@ export function CommitFilesPane({
       setSelection(nextSelection);
     }
     if (activeFile) {
-      const still = files.find((f) => sameFile(f, activeFile)) ?? null;
+      const still =
+        selectableFiles.find((f) => sameFile(f, activeFile)) ?? null;
       if (!still) {
-        setActiveFile(nextSelection[nextSelection.length - 1] ?? null);
-        if (nextSelection.length === 0) {
+        const fallback =
+          nextSelection[nextSelection.length - 1] ??
+          selectableFiles[0] ??
+          null;
+        setActiveFile(fallback);
+        if (fallback) {
+          setSelection((prev) =>
+            prev.length === 0 ? [fallback] : prev,
+          );
+        } else {
           setDiff("");
           setDiffError(null);
+          if (uncommitted) {
+            persistSelectedFile(repositoryId, commit.id, null);
+          }
         }
       } else if (!sameFile(still, activeFile)) {
         setActiveFile(still);
       }
+    } else if (nextSelection.length > 0) {
+      setActiveFile(nextSelection[nextSelection.length - 1]!);
+    } else if (!uncommitted && selectableFiles.length > 0) {
+      const first = selectableFiles[0]!;
+      setSelection([first]);
+      setActiveFile(first);
+      selectionAnchorRef.current = first;
     }
-    // Only re-sync when the file list changes.
+    // Only re-sync when the file list changes / restore completes.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selection/activeFile updated intentionally from files
-  }, [files]);
+  }, [selectableFiles, loading, commit?.id, repositoryId, uncommitted]);
+
+  useEffect(() => {
+    if (!commit?.id || !uncommitted) return;
+    if (pendingFileRestoreRef.current !== undefined) return;
+    if (!activeFile) return;
+    persistSelectedFile(repositoryId, commit.id, toPersisted(activeFile));
+  }, [activeFile, commit?.id, repositoryId, uncommitted]);
 
   useEffect(() => {
     if (!commit || !activeFile) {
@@ -633,7 +739,7 @@ export function CommitFilesPane({
                           : file.path
                       }
                     >
-                      <StatusBadge status={file.status} uncommitted={false} />
+                      <StatusBadge status={file.status} />
                       <span className="font-filename min-w-0 truncate text-ink">
                         {file.oldPath ? (
                           <>
@@ -653,31 +759,38 @@ export function CommitFilesPane({
           )}
         </div>
 
-        <VerticalSplitHandle
-          onDrag={onInfoHeightDrag}
-          onDragEnd={onInfoHeightDragEnd}
-        />
-
-        <div
-          className="shrink-0 overflow-auto border-t border-border bg-surface/40"
-          style={{ height: infoHeight }}
-        >
-          {uncommitted ? (
-            <CommitForm
-              message={message}
-              amend={amend}
-              busy={busy}
-              canCommit={staged.length > 0 || amend}
-              stagedCount={staged.length}
-              actionError={actionError}
-              onMessageChange={setMessage}
-              onAmendChange={setAmend}
-              onSubmit={handleCommit}
+        {showBottomMeta && (
+          <>
+            <VerticalSplitHandle
+              onDrag={onInfoHeightDrag}
+              onDragEnd={onInfoHeightDragEnd}
             />
-          ) : (
-            <CommitInfoPanel commit={commit} onSelectCommitId={onSelectCommitId} />
-          )}
-        </div>
+
+            <div
+              className="shrink-0 overflow-auto border-t border-border bg-surface/40"
+              style={{ height: infoHeight }}
+            >
+              {uncommitted ? (
+                <CommitForm
+                  message={message}
+                  amend={amend}
+                  busy={busy}
+                  canCommit={staged.length > 0 || amend}
+                  stagedCount={staged.length}
+                  actionError={actionError}
+                  onMessageChange={setMessage}
+                  onAmendChange={setAmend}
+                  onSubmit={handleCommit}
+                />
+              ) : (
+                <CommitInfoPanel
+                  commit={commit}
+                  onSelectCommitId={onSelectCommitId}
+                />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <FilesSplitHandle onDrag={onFilesWidthDrag} onDragEnd={onFilesWidthDragEnd} />
@@ -948,7 +1061,7 @@ function FileSection({
                       : file.path
                   }
                 >
-                  <StatusBadge status={file.status} uncommitted />
+                  <StatusBadge status={file.status} />
                   <span className="font-filename min-w-0 truncate text-ink">
                     {file.path}
                   </span>
@@ -1347,13 +1460,7 @@ function statusLabel(status: string): string {
 }
 
 /** Colored status chip: letter on a filled rectangle. */
-function StatusBadge({
-  status,
-  uncommitted,
-}: {
-  status: string;
-  uncommitted: boolean;
-}) {
+function StatusBadge({ status }: { status: string }) {
   const letter = statusLabel(status);
   const kind = status.charAt(0);
 
@@ -1367,15 +1474,17 @@ function StatusBadge({
   if (kind === "M" || kind === "T") {
     className = onColor;
     style = { backgroundColor: "var(--status-modified)" };
-  } else if (kind === "A" || kind === "?") {
+  } else if (kind === "?") {
+    // Untracked / new in the working tree.
     className = onColor;
-    style = {
-      backgroundColor: uncommitted
-        ? "var(--status-new)"
-        : "var(--status-added)",
-    };
+    style = { backgroundColor: "var(--status-new)" };
+  } else if (kind === "A") {
+    // Added to the index (staged or historical).
+    className = onColor;
+    style = { backgroundColor: "var(--status-added)" };
   } else if (kind === "D") {
-    className = "bg-danger text-white";
+    className = onColor;
+    style = { backgroundColor: "var(--status-deleted)" };
   } else if (kind === "R" || kind === "C") {
     className = "bg-accent text-white";
   } else {

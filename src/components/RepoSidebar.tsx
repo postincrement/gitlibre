@@ -1,15 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   BranchInfo,
   RepositoryId,
   RepoStatus,
+  WorkingTreeStatus,
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import type { ContentViewMode } from "../lib/contentView";
 import {
   clampRepoListHeight,
   loadRepoListHeight,
+  loadReposPanelStyle,
   persistRepoListHeight,
+  persistReposPanelStyle,
+  type ReposPanelStyle,
 } from "../lib/workspaceLayout";
 import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
@@ -19,8 +31,10 @@ interface RepoSidebarProps {
   selectedId: RepositoryId | null;
   branches: BranchInfo[];
   width: number;
+  contentView: ContentViewMode;
   busy?: boolean;
   onSelect: (id: RepositoryId) => void;
+  onContentViewChange: (mode: ContentViewMode) => void;
   onAddRepository: () => void;
   onManageAccounts: (id: RepositoryId) => void;
   onRemoveRepository: (id: RepositoryId) => void;
@@ -42,8 +56,10 @@ export function RepoSidebar({
   selectedId,
   branches,
   width,
+  contentView,
   busy,
   onSelect,
+  onContentViewChange,
   onAddRepository,
   onManageAccounts,
   onRemoveRepository,
@@ -54,6 +70,9 @@ export function RepoSidebar({
   const [remoteBranchesLoading, setRemoteBranchesLoading] = useState(false);
   const [remoteBranchesError, setRemoteBranchesError] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [reposPanelStyle, setReposPanelStyle] = useState<ReposPanelStyle>(() =>
+    loadReposPanelStyle(workspaceId),
+  );
   const [repoListHeight, setRepoListHeight] = useState(() =>
     loadRepoListHeight(workspaceId),
   );
@@ -63,11 +82,22 @@ export function RepoSidebar({
   const workspaceIdRef = useRef(workspaceId);
   const selected = statuses.find((s) => s.repositoryId === selectedId) ?? null;
   const asideStyle = { width, minWidth: width, maxWidth: width };
+  const selectedDirtyCount = selected?.workingTree
+    ? dirtyFileCount(selected.workingTree)
+    : 0;
 
   useEffect(() => {
     workspaceIdRef.current = workspaceId;
     setRepoListHeight(loadRepoListHeight(workspaceId));
+    setReposPanelStyle(loadReposPanelStyle(workspaceId));
   }, [workspaceId]);
+
+  function toggleReposPanelStyle() {
+    const next: ReposPanelStyle =
+      reposPanelStyle === "list" ? "dropdown" : "list";
+    setReposPanelStyle(next);
+    persistReposPanelStyle(workspaceId, next);
+  }
 
   useEffect(() => {
     repoListHeightRef.current = repoListHeight;
@@ -203,6 +233,27 @@ export function RepoSidebar({
           </div>
           <button
             type="button"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-surface-overlay text-ink-muted transition hover:border-ink-muted hover:text-ink"
+            title={
+              reposPanelStyle === "list"
+                ? "Switch to dropdown"
+                : "Switch to scrolling list"
+            }
+            aria-label={
+              reposPanelStyle === "list"
+                ? "Switch to dropdown"
+                : "Switch to scrolling list"
+            }
+            onClick={toggleReposPanelStyle}
+          >
+            {reposPanelStyle === "list" ? (
+              <DropdownModeIcon />
+            ) : (
+              <ListModeIcon />
+            )}
+          </button>
+          <button
+            type="button"
             className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-surface-overlay text-[11px] leading-none text-ink-muted transition hover:border-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
             title="Add repository"
             aria-label="Add repository"
@@ -212,99 +263,131 @@ export function RepoSidebar({
             +
           </button>
         </div>
-        <ul
-          className="shrink-0 overflow-y-auto p-1.5"
-          style={{ height: repoListHeight }}
-        >
-          {statuses.map((repo) => {
-            const isSelected = repo.repositoryId === selectedId;
-            const dirtyCount = repo.workingTree
-              ? repo.workingTree.modified +
-                repo.workingTree.added +
-                repo.workingTree.deleted +
-                repo.workingTree.untracked +
-                repo.workingTree.renamed +
-                repo.workingTree.conflicted
-              : 0;
-            const clean = repo.available && dirtyCount === 0;
 
-            return (
-              <li
-                key={repo.repositoryId}
-                ref={(el) => {
-                  if (isSelected) selectedRepoItemRef.current = el;
+        {reposPanelStyle === "dropdown" ? (
+          <div
+            className="shrink-0 border-b border-border px-2 py-1.5"
+            onContextMenu={(e) => {
+              if (!selectedId) return;
+              e.preventDefault();
+              setMenu({
+                repositoryId: selectedId,
+                x: e.clientX,
+                y: e.clientY,
+              });
+            }}
+          >
+            <div className="relative">
+              <select
+                className="field-input w-full py-1 pr-10 text-[12px]"
+                value={selectedId ?? ""}
+                aria-label="Repository"
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (id) onSelect(id as RepositoryId);
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => onSelect(repo.repositoryId)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setMenu({
-                      repositoryId: repo.repositoryId,
-                      x: e.clientX,
-                      y: e.clientY,
-                    });
-                  }}
-                  className={[
-                    "mb-0.5 w-full rounded px-2 py-1.5 text-left transition",
-                    isSelected
-                      ? "bg-accent/20 ring-1 ring-accent/50"
-                      : "hover:bg-surface-overlay",
-                  ].join(" ")}
-                >
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="truncate font-medium text-ink">
-                      {repo.displayName}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      {repo.isFetching && (
-                        <span
-                          className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
-                          title="Fetching"
-                        />
-                      )}
-                      {repo.lastError && (
-                        <span
-                          className="h-1.5 w-1.5 rounded-full bg-danger"
-                          title={repo.lastError}
-                        />
-                      )}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center justify-between gap-1.5 text-[10px] text-ink-muted">
-                    <span className="truncate">
-                      {repo.detachedHead
-                        ? "detached HEAD"
-                        : (repo.currentBranch ??
-                          (repo.available ? "(no branch)" : "unavailable"))}
-                    </span>
-                    <span
-                      className={
-                        !repo.available
-                          ? "text-danger"
-                          : clean
-                            ? "text-success"
-                            : "text-warning"
-                      }
-                    >
-                      {!repo.available
-                        ? "missing"
-                        : clean
-                          ? "clean"
-                          : `${dirtyCount} chg`}
-                    </span>
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+                {statuses.map((repo) => (
+                  <option key={repo.repositoryId} value={repo.repositoryId}>
+                    {repo.displayName}
+                    {!repo.available ? " (missing)" : ""}
+                  </option>
+                ))}
+              </select>
+              {selected?.available && selectedDirtyCount > 0 && (
+                <DirtyCountBadge
+                  count={selectedDirtyCount}
+                  className="pointer-events-none absolute right-6 top-1/2 z-[1] -translate-y-1/2"
+                />
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <ul
+              className="shrink-0 overflow-y-auto px-1.5 pb-1.5 pt-2"
+              style={{ height: repoListHeight }}
+            >
+              {statuses.map((repo) => {
+                const isSelected = repo.repositoryId === selectedId;
+                const dirtyCount = repo.workingTree
+                  ? dirtyFileCount(repo.workingTree)
+                  : 0;
 
-        <VerticalSplitHandle
-          label="Resize repositories list"
-          onDrag={onRepoListDrag}
-          onDragEnd={onRepoListDragEnd}
+                return (
+                  <li
+                    key={repo.repositoryId}
+                    ref={(el) => {
+                      if (isSelected) selectedRepoItemRef.current = el;
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelect(repo.repositoryId)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu({
+                          repositoryId: repo.repositoryId,
+                          x: e.clientX,
+                          y: e.clientY,
+                        });
+                      }}
+                      className={[
+                        "mb-0.5 w-full rounded px-2 py-1.5 text-left transition",
+                        isSelected
+                          ? "bg-accent/20 ring-1 ring-accent/50"
+                          : "hover:bg-surface-overlay",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex min-w-0 flex-1 items-center gap-1 pr-1">
+                          <div
+                            className="truncate font-medium text-ink"
+                            title={repoHoverTitle(repo)}
+                          >
+                            {repo.displayName}
+                          </div>
+                          {repo.available && dirtyCount > 0 && (
+                            <DirtyCountBadge count={dirtyCount} />
+                          )}
+                          {!repo.available && (
+                            <span className="shrink-0 text-[10px] text-danger">
+                              missing
+                            </span>
+                          )}
+                        </div>
+                        <span className="flex shrink-0 items-center gap-1">
+                          {repo.isFetching && (
+                            <span
+                              className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
+                              title="Fetching"
+                            />
+                          )}
+                          {repo.lastError && (
+                            <span
+                              className="h-1.5 w-1.5 rounded-full bg-danger"
+                              title={repo.lastError}
+                            />
+                          )}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <VerticalSplitHandle
+              label="Resize repositories list"
+              onDrag={onRepoListDrag}
+              onDragEnd={onRepoListDragEnd}
+            />
+          </>
+        )}
+
+        <ContentViewToolbar
+          active={contentView}
+          onChange={onContentViewChange}
         />
 
         <div className="flex max-h-[35%] shrink-0 flex-col border-t border-border">
@@ -431,6 +514,87 @@ export function RepoSidebar({
   );
 }
 
+function ContentViewToolbar({
+  active,
+  onChange,
+}: {
+  active: ContentViewMode;
+  onChange: (mode: ContentViewMode) => void;
+}) {
+  const items: {
+    mode: ContentViewMode;
+    label: string;
+    icon: ReactNode;
+  }[] = [
+    {
+      mode: "fileStatus",
+      label: "File Status",
+      icon: (
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+          <path
+            fill="currentColor"
+            d="M3 2.5A1.5 1.5 0 0 1 4.5 1h5.086a1.5 1.5 0 0 1 1.06.44l2.914 2.914A1.5 1.5 0 0 1 14 5.414V13.5A1.5 1.5 0 0 1 12.5 15h-8A1.5 1.5 0 0 1 3 13.5v-11Zm1.5-.5a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V5.414a.5.5 0 0 0-.146-.353L10.44 2.146A.5.5 0 0 0 10.086 2H4.5Zm1 5.75a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 5.5 7.75Zm0 3a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"
+          />
+        </svg>
+      ),
+    },
+    {
+      mode: "history",
+      label: "History",
+      icon: (
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+          <path
+            fill="currentColor"
+            d="M8 1.5a6.5 6.5 0 1 0 3.248 12.07.75.75 0 0 0-.75-1.298A5 5 0 1 1 13 8a.75.75 0 0 0 1.5 0A6.5 6.5 0 0 0 8 1.5Zm.75 3a.75.75 0 0 0-1.5 0v3.19l-1.72 1.72a.75.75 0 1 0 1.06 1.06l2.03-2.03A.75.75 0 0 0 8.75 8V4.5Z"
+          />
+        </svg>
+      ),
+    },
+    {
+      mode: "search",
+      label: "Search",
+      icon: (
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+          <path
+            fill="currentColor"
+            d="M6.5 2a4.5 4.5 0 1 0 2.845 7.97l3.342 3.343a.75.75 0 1 0 1.06-1.06l-3.342-3.343A4.5 4.5 0 0 0 6.5 2Zm-3 4.5a3 3 0 1 1 6 0 3 3 0 0 1-6 0Z"
+          />
+        </svg>
+      ),
+    },
+  ];
+
+  return (
+    <div
+      className="flex shrink-0 items-center justify-center gap-0.5 border-y border-border bg-surface/40 px-1.5 py-1"
+      role="toolbar"
+      aria-label="Content view"
+    >
+      {items.map((item) => {
+        const isActive = active === item.mode;
+        return (
+          <button
+            key={item.mode}
+            type="button"
+            title={item.label}
+            aria-label={item.label}
+            aria-pressed={isActive}
+            onClick={() => onChange(item.mode)}
+            className={[
+              "inline-flex h-7 w-8 items-center justify-center rounded transition",
+              isActive
+                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                : "text-ink-muted hover:bg-surface-overlay hover:text-ink",
+            ].join(" ")}
+          >
+            {item.icon}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function buildBranchTree(names: string[]): BranchTreeNode[] {
   type MutableNode =
     | { kind: "folder"; name: string; path: string; children: Map<string, MutableNode> }
@@ -540,6 +704,100 @@ function RemoteBranchTree({
         );
       })}
     </ul>
+  );
+}
+
+function dirtyFileCount(wt: WorkingTreeStatus): number {
+  return (
+    wt.modified +
+    wt.added +
+    wt.deleted +
+    wt.untracked +
+    wt.renamed +
+    wt.conflicted
+  );
+}
+
+function repoHoverTitle(repo: RepoStatus): string {
+  const branch = repo.detachedHead
+    ? "detached HEAD"
+    : (repo.currentBranch ??
+      (repo.available ? "(no branch)" : "unavailable"));
+  return `branch: ${branch}`;
+}
+
+function DirtyCountBadge({
+  count,
+  className,
+}: {
+  count: number;
+  className?: string;
+}) {
+  const label = `${count} changed files`;
+  return (
+    <span
+      className={[
+        "inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-[3px] px-1 text-[10px] font-bold leading-none text-white shadow-sm ring-1 ring-surface-raised",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{ backgroundColor: "var(--status-repo-changes)" }}
+      title={label}
+      aria-label={label}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function DropdownModeIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      aria-hidden
+      className="block"
+    >
+      <rect
+        x="1.5"
+        y="2"
+        width="9"
+        height="8"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.25"
+      />
+      <path
+        d="M4 5.5 L6 7.5 L8 5.5"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ListModeIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      aria-hidden
+      className="block"
+    >
+      <path
+        d="M2 3.5h8M2 6h8M2 8.5h8"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

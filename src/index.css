@@ -57,6 +57,8 @@ html {
   --status-modified: #f6c342;
   --status-added: #14892c;
   --status-new: #654982;
+  --status-deleted: #999999;
+  --status-repo-changes: #3472b0;
 }
 
 html.light {

@@ -1,9 +1,17 @@
-export type StatusColorKey = "modified" | "added" | "new";
+export type StatusColorKey =
+  | "modified"
+  | "added"
+  | "new"
+  | "deleted"
+  | "repoChanges";
 
 export interface StatusColors {
   modified: string;
   added: string;
   new: string;
+  deleted: string;
+  /** Badge on dirty repositories in the sidebar. */
+  repoChanges: string;
 }
 
 export const DEFAULT_STATUS_COLORS: StatusColors = {
@@ -12,6 +20,10 @@ export const DEFAULT_STATUS_COLORS: StatusColors = {
   added: "#14892c",
   /** New / untracked files in the working tree. */
   new: "#654982",
+  /** Deleted files. */
+  deleted: "#999999",
+  /** Changed-file count badge on repository rows. */
+  repoChanges: "#3472b0",
 };
 
 const STORAGE_KEY = "gitlibre.statusColors";
@@ -37,6 +49,14 @@ export function loadStatusColors(): StatusColors {
       ),
       added: normalizeHex(parsed.added ?? "", DEFAULT_STATUS_COLORS.added),
       new: normalizeHex(parsed.new ?? "", DEFAULT_STATUS_COLORS.new),
+      deleted: normalizeHex(
+        parsed.deleted ?? "",
+        DEFAULT_STATUS_COLORS.deleted,
+      ),
+      repoChanges: normalizeHex(
+        parsed.repoChanges ?? "",
+        DEFAULT_STATUS_COLORS.repoChanges,
+      ),
     };
   } catch {
     return { ...DEFAULT_STATUS_COLORS };
@@ -58,6 +78,8 @@ export function applyStatusColors(colors: StatusColors): void {
   root.style.setProperty("--status-modified", colors.modified);
   root.style.setProperty("--status-added", colors.added);
   root.style.setProperty("--status-new", colors.new);
+  root.style.setProperty("--status-deleted", colors.deleted);
+  root.style.setProperty("--status-repo-changes", colors.repoChanges);
 }
 
 export function resetStatusColors(): StatusColors {
