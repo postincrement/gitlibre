@@ -12,6 +12,7 @@ import {
 } from "../lib/uiSettings";
 import {
   applyStatusColors,
+  contrastingInk,
   DEFAULT_STATUS_COLORS,
   loadStatusColors,
   resetStatusColors,
@@ -42,6 +43,8 @@ const STATUS_COLOR_FIELDS: {
   { key: "new", label: "New", letter: "U" },
   { key: "deleted", label: "Deleted", letter: "D" },
   { key: "repoChanges", label: "Repo changes badge", letter: "3" },
+  { key: "branch", label: "Branch badge", letter: "b" },
+  { key: "branchDivergence", label: "Ahead / behind", letter: "↑" },
 ];
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
@@ -168,7 +171,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="space-y-2.5">
               {STATUS_COLOR_FIELDS.map((field) => (
                 <div key={field.key} className="flex items-center gap-3">
-                  <span className="w-20 shrink-0 text-sm text-ink">
+                  <span className="w-32 shrink-0 text-sm text-ink">
                     {field.label}
                   </span>
                   <StatusColorSwatch
@@ -255,10 +258,13 @@ function TabButton({
 }
 
 function StatusColorSwatch({ letter, color }: { letter: string; color: string }) {
+  const ink = contrastingInk(
+    /^#[0-9a-fA-F]{6}$/.test(color.trim()) ? color.trim() : "#888888",
+  );
   return (
     <span
-      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] font-mono text-[11px] font-bold leading-none text-[#1a1200] [:is(html.light)_&]:text-white"
-      style={{ backgroundColor: color }}
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] font-mono text-[11px] font-bold leading-none"
+      style={{ backgroundColor: color, color: ink }}
       aria-hidden
     >
       {letter}

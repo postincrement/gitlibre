@@ -818,15 +818,29 @@ function BranchDivergence({ branch }: { branch: BranchInfo }) {
   if (behind == null && ahead == null) return null;
 
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums text-[10px]">
-      {behind != null && (
-        <span className="text-warning" aria-label={`${behind} behind`}>
-          {behind}↓
+    <span className="ml-auto flex shrink-0 items-center gap-1 tabular-nums text-[10px]">
+      {ahead != null && (
+        <span
+          className="inline-flex items-center rounded-[3px] px-1 text-[9px] font-bold leading-none"
+          style={{
+            backgroundColor: "var(--status-branch-divergence)",
+            color: "var(--status-branch-divergence-fg)",
+          }}
+          aria-label={`${ahead} ahead`}
+        >
+          {ahead}↑
         </span>
       )}
-      {ahead != null && (
-        <span className="text-success" aria-label={`${ahead} ahead`}>
-          {ahead}↑
+      {behind != null && (
+        <span
+          className="inline-flex items-center rounded-[3px] px-1 text-[9px] font-bold leading-none"
+          style={{
+            backgroundColor: "var(--status-branch-divergence)",
+            color: "var(--status-branch-divergence-fg)",
+          }}
+          aria-label={`${behind} behind`}
+        >
+          {behind}↓
         </span>
       )}
     </span>

@@ -38,6 +38,16 @@ import {
 } from "../lib/fileSelection";
 import { isImagePath } from "../lib/imagePath";
 import {
+  loadNoVerify,
+  loadPushImmediately,
+  loadSignCommit,
+  loadSignOff,
+  persistNoVerify,
+  persistPushImmediately,
+  persistSignCommit,
+  persistSignOff,
+} from "../lib/commitUiPrefs";
+import {
   loadSeparateUntrackedList,
   UI_SETTINGS_CHANGED_EVENT,
 } from "../lib/uiSettings";
@@ -112,6 +122,8 @@ interface CommitFilesPaneProps {
    * (History mode). Commit info for real commits is unaffected.
    */
   hideCommitComposer?: boolean;
+  /** e.g. `origin/main` for the push-immediately checkbox label. */
+  pushTargetLabel?: string | null;
 }
 
 export function CommitFilesPane({
@@ -125,6 +137,7 @@ export function CommitFilesPane({
   onCommitted,
   onSelectCommitId,
   hideCommitComposer = false,
+  pushTargetLabel = null,
 }: CommitFilesPaneProps) {
   /** All selected file rows (multi-select). */
   const [selection, setSelection] = useState<CommitFileChange[]>([]);
@@ -141,6 +154,12 @@ export function CommitFilesPane({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
+  const [pushImmediately, setPushImmediately] = useState(() =>
+    loadPushImmediately(),
+  );
+  const [signOff, setSignOff] = useState(() => loadSignOff());
+  const [signCommit, setSignCommit] = useState(() => loadSignCommit());
+  const [noVerify, setNoVerify] = useState(() => loadNoVerify());
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null);
   const [pendingFileAction, setPendingFileAction] =
     useState<PendingFileAction | null>(null);
@@ -470,13 +489,33 @@ export function CommitFilesPane({
     persistStagedFilesPaneHeight(workspaceId, stagedPaneHeightRef.current);
   }, [workspaceId]);
 
+  async function handleAmendChange(next: boolean) {
+    setAmend(next);
+    if (next && !message.trim()) {
+      try {
+        const prior = await api.readHeadCommitMessage(repositoryId);
+        if (prior.trim()) setMessage(prior);
+      } catch {
+        /* leave message as-is */
+      }
+    }
+  }
+
   async function handleCommit(e: FormEvent) {
     e.preventDefault();
     if (!message.trim() && !amend) return;
     if (!amend && staged.length === 0) return;
     await runMutation(
       async () => {
-        await api.commitRepository(repositoryId, message, amend);
+        await api.commitRepository(repositoryId, message, {
+          amend,
+          signOff,
+          signCommit,
+          noVerify,
+        });
+        if (pushImmediately) {
+          await api.pushRepository(repositoryId);
+        }
       },
       { committed: true },
     );
@@ -628,8 +667,12 @@ export function CommitFilesPane({
     );
   }
 
+  const showCommitComposer = uncommitted && showBottomMeta;
+  const showCommitInfo = !uncommitted && showBottomMeta;
+
   return (
-    <div className="flex h-full min-h-0 bg-surface-raised/40">
+    <div className="flex h-full min-h-0 flex-col bg-surface-raised/40">
+      <div className="flex min-h-0 min-w-0 flex-1">
       <div
         className="flex min-h-0 shrink-0 flex-col border-r border-border"
         style={{ width: filesWidth }}
@@ -638,7 +681,7 @@ export function CommitFilesPane({
           <div className="shrink-0 border-b border-border bg-surface-raised/95 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
             Files
           </div>
-          {actionError && (
+          {actionError && !showCommitComposer && (
             <p className="shrink-0 border-b border-border/60 px-3 py-1.5 text-[11px] text-danger">
               {actionError}
             </p>
@@ -801,7 +844,7 @@ export function CommitFilesPane({
           )}
         </div>
 
-        {showBottomMeta && (
+        {showCommitInfo && (
           <>
             <VerticalSplitHandle
               onDrag={onInfoHeightDrag}
@@ -812,24 +855,10 @@ export function CommitFilesPane({
               className="shrink-0 overflow-auto border-t border-border bg-surface/40"
               style={{ height: infoHeight }}
             >
-              {uncommitted ? (
-                <CommitForm
-                  message={message}
-                  amend={amend}
-                  busy={busy}
-                  canCommit={staged.length > 0 || amend}
-                  stagedCount={staged.length}
-                  actionError={actionError}
-                  onMessageChange={setMessage}
-                  onAmendChange={setAmend}
-                  onSubmit={handleCommit}
-                />
-              ) : (
-                <CommitInfoPanel
-                  commit={commit}
-                  onSelectCommitId={onSelectCommitId}
-                />
-              )}
+              <CommitInfoPanel
+                commit={commit}
+                onSelectCommitId={onSelectCommitId}
+              />
             </div>
           </>
         )}
@@ -859,6 +888,53 @@ export function CommitFilesPane({
           </div>
         )}
       </div>
+      </div>
+
+      {showCommitComposer && (
+        <>
+          <VerticalSplitHandle
+            onDrag={onInfoHeightDrag}
+            onDragEnd={onInfoHeightDragEnd}
+          />
+          <div
+            className="shrink-0 overflow-auto border-t border-border bg-surface/40"
+            style={{ height: infoHeight }}
+          >
+            <CommitForm
+              message={message}
+              amend={amend}
+              pushImmediately={pushImmediately}
+              pushTargetLabel={pushTargetLabel}
+              signOff={signOff}
+              signCommit={signCommit}
+              noVerify={noVerify}
+              busy={busy}
+              canCommit={staged.length > 0 || amend}
+              stagedCount={staged.length}
+              actionError={actionError}
+              onMessageChange={setMessage}
+              onAmendChange={(v) => void handleAmendChange(v)}
+              onPushImmediatelyChange={(v) => {
+                setPushImmediately(v);
+                persistPushImmediately(v);
+              }}
+              onSignOffChange={(v) => {
+                setSignOff(v);
+                persistSignOff(v);
+              }}
+              onSignCommitChange={(v) => {
+                setSignCommit(v);
+                persistSignCommit(v);
+              }}
+              onNoVerifyChange={(v) => {
+                setNoVerify(v);
+                persistNoVerify(v);
+              }}
+              onSubmit={handleCommit}
+            />
+          </div>
+        </>
+      )}
 
       {pendingFileAction && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
@@ -1309,59 +1385,178 @@ function MenuItem({
 function CommitForm({
   message,
   amend,
+  pushImmediately,
+  pushTargetLabel,
+  signOff,
+  signCommit,
+  noVerify,
   busy,
   canCommit,
   stagedCount,
   actionError,
   onMessageChange,
   onAmendChange,
+  onPushImmediatelyChange,
+  onSignOffChange,
+  onSignCommitChange,
+  onNoVerifyChange,
   onSubmit,
 }: {
   message: string;
   amend: boolean;
+  pushImmediately: boolean;
+  pushTargetLabel: string | null;
+  signOff: boolean;
+  signCommit: boolean;
+  noVerify: boolean;
   busy: boolean;
   canCommit: boolean;
   stagedCount: number;
   actionError: string | null;
   onMessageChange: (v: string) => void;
   onAmendChange: (v: boolean) => void;
+  onPushImmediatelyChange: (v: boolean) => void;
+  onSignOffChange: (v: boolean) => void;
+  onSignCommitChange: (v: boolean) => void;
+  onNoVerifyChange: (v: boolean) => void;
   onSubmit: (e: FormEvent) => void;
 }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const optionsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!optionsOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOptionsOpen(false);
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (optionsRef.current && !optionsRef.current.contains(e.target as Node)) {
+        setOptionsOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [optionsOpen]);
+
+  const optionHints = [
+    signOff ? "Sign Off" : null,
+    signCommit ? "Sign" : null,
+    noVerify ? "No hooks" : null,
+  ].filter(Boolean);
+
   return (
-    <form onSubmit={onSubmit} className="space-y-2 px-3 py-2 text-[12px]">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-        Commit
-      </div>
-      <textarea
-        className="field-input min-h-[72px] resize-y font-sans text-[12px]"
-        placeholder="Commit message"
-        value={message}
-        onChange={(e) => onMessageChange(e.target.value)}
-        disabled={busy}
-      />
-      <label className="flex items-center gap-2 text-[11px] text-ink-muted">
-        <input
-          type="checkbox"
-          checked={amend}
-          onChange={(e) => onAmendChange(e.target.checked)}
+    <form
+      onSubmit={onSubmit}
+      className="flex h-full min-h-0 flex-col gap-2 px-3 py-2 text-[12px] sm:flex-row sm:gap-4"
+    >
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+        <div className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+          Commit message
+        </div>
+        <textarea
+          className="field-input min-h-[72px] flex-1 resize-none font-sans text-[12px]"
+          placeholder="Commit message"
+          value={message}
+          onChange={(e) => onMessageChange(e.target.value)}
           disabled={busy}
         />
-        Amend previous commit
-      </label>
-      {actionError && <p className="text-[11px] text-danger">{actionError}</p>}
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-ink-muted">
-          {stagedCount} staged
-        </span>
-        <button
-          type="submit"
-          className="btn-primary"
-          disabled={
-            busy || !canCommit || (!amend && !message.trim()) || (!amend && stagedCount === 0)
-          }
-        >
-          {busy ? "Working…" : amend ? "Amend" : "Commit"}
-        </button>
+        {actionError && <p className="shrink-0 text-[11px] text-danger">{actionError}</p>}
+      </div>
+      <div className="flex w-full shrink-0 flex-col justify-between gap-2 sm:w-64">
+        <div className="space-y-1.5">
+          <label className="flex items-start gap-2 text-[11px] text-ink">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={pushImmediately}
+              onChange={(e) => onPushImmediatelyChange(e.target.checked)}
+              disabled={busy || !pushTargetLabel}
+            />
+            <span className={!pushTargetLabel ? "text-ink-muted" : undefined}>
+              {pushTargetLabel
+                ? `Push changes immediately to ${pushTargetLabel}`
+                : "Push changes immediately (no upstream)"}
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-ink">
+            <input
+              type="checkbox"
+              checked={amend}
+              onChange={(e) => onAmendChange(e.target.checked)}
+              disabled={busy}
+            />
+            Amend latest commit
+          </label>
+          <p className="text-[11px] text-ink-muted">
+            {stagedCount} staged
+            {optionHints.length > 0 ? ` · ${optionHints.join(", ")}` : ""}
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-1.5">
+          <div className="relative" ref={optionsRef}>
+            <button
+              type="button"
+              className="btn-secondary px-2 py-1 text-[11px]"
+              disabled={busy}
+              aria-expanded={optionsOpen}
+              aria-haspopup="menu"
+              onClick={() => setOptionsOpen((o) => !o)}
+            >
+              Commit Options…
+            </button>
+            {optionsOpen && (
+              <div
+                role="menu"
+                aria-label="Commit options"
+                className="absolute bottom-full right-0 z-40 mb-1 min-w-52 rounded-md border border-border bg-surface-raised py-1 shadow-xl shadow-black/40"
+              >
+                <label className="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[12px] text-ink hover:bg-surface-overlay">
+                  <input
+                    type="checkbox"
+                    checked={signOff}
+                    onChange={(e) => onSignOffChange(e.target.checked)}
+                    disabled={busy}
+                  />
+                  Sign Off
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[12px] text-ink hover:bg-surface-overlay">
+                  <input
+                    type="checkbox"
+                    checked={signCommit}
+                    onChange={(e) => onSignCommitChange(e.target.checked)}
+                    disabled={busy}
+                  />
+                  Sign Commit
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[12px] text-ink hover:bg-surface-overlay">
+                  <input
+                    type="checkbox"
+                    checked={noVerify}
+                    onChange={(e) => onNoVerifyChange(e.target.checked)}
+                    disabled={busy}
+                  />
+                  Bypass commit hooks
+                </label>
+              </div>
+            )}
+          </div>
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={
+              busy ||
+              !canCommit ||
+              (!amend && !message.trim()) ||
+              (!amend && stagedCount === 0)
+            }
+          >
+            {busy ? "Working…" : amend ? "Amend" : "Commit"}
+          </button>
+        </div>
       </div>
     </form>
   );

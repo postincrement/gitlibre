@@ -75,6 +75,8 @@ pub fn run() {
             commands::open_repository_file,
             commands::reveal_repository_file,
             commands::commit_repository,
+            commands::read_head_commit_message,
+            commands::push_repository,
             commands::list_workspace_statuses,
             commands::fetch_repository,
             commands::pull_repository,

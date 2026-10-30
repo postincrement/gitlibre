@@ -40,3 +40,15 @@ export async function onMenuAccounts(handler: () => void): Promise<UnlistenFn> {
 export async function onMenuSettings(handler: () => void): Promise<UnlistenFn> {
   return listen("menu-settings", () => handler());
 }
+
+export async function onMenuZoomIn(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-zoom-in", () => handler());
+}
+
+export async function onMenuZoomOut(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-zoom-out", () => handler());
+}
+
+export async function onMenuZoomReset(handler: () => void): Promise<UnlistenFn> {
+  return listen("menu-zoom-reset", () => handler());
+}

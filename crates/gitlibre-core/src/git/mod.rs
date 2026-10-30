@@ -19,8 +19,8 @@ pub use show::{
     list_commit_files, ChangeArea, CommitFileChange, FileBytesPair, UNCOMMITTED_COMMIT_ID,
 };
 pub use stage::{
-    commit_index, discard_paths, remove_paths, resolve_repo_path, stage_paths, stop_tracking_paths,
-    unstage_paths,
+    commit_index, discard_paths, push_current_branch, read_head_commit_message, remove_paths,
+    resolve_repo_path, stage_paths, stop_tracking_paths, unstage_paths, CommitOptions,
 };
 pub use status::{
     inspect_repository, parse_porcelain_v2, RemoteInfo, RepoInspection, WorkingTreeStatus,
