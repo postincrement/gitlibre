@@ -23,14 +23,14 @@ pub use error::{CoreError, CoreResult, ErrorCode};
 pub use fetch::{FetchCoordinator, FetchOutcome, FetchProgress, WorkspaceFetchSummary};
 pub use pull::{list_conflicted_paths, PullOutcome};
 pub use git::{
-    blame_file, commit_index, discard_paths, get_commit_file_bytes_pair, get_commit_file_diff,
-    get_commit_file_diff_with_old_path, inspect_repository, list_commit_files, list_commits,
-    list_file_commits, list_local_branches, list_local_branches_for_remote,
-    list_remote_branches, push_current_branch, read_commit_identity, read_head_commit_message,
-    remove_paths, resolve_repo_path, stage_paths, stop_tracking_paths, unstage_paths, BlameLine,
-    BranchInfo, ChangeArea, CommitFileChange, CommitIdentity, CommitInfo, CommitOptions,
-    FileBytesPair, GitExecutor, RemoteInfo, RepoInspection, WorkingTreeStatus,
-    UNCOMMITTED_COMMIT_ID,
+    blame_file, checkout_revision, commit_index, create_branch_at, create_tag_at, discard_paths,
+    get_commit_file_bytes_pair, get_commit_file_diff, get_commit_file_diff_with_old_path,
+    inspect_repository, list_commit_files, list_commits, list_file_commits, list_local_branches,
+    list_local_branches_for_remote, list_remote_branches, push_current_branch,
+    read_commit_identity, read_head_commit_message, remove_paths, resolve_repo_path, stage_paths,
+    stop_tracking_paths, unstage_paths, BlameLine, BranchInfo, ChangeArea, CommitFileChange,
+    CommitIdentity, CommitInfo, CommitOptions, FileBytesPair, GitExecutor, RemoteInfo,
+    RepoInspection, WorkingTreeStatus, UNCOMMITTED_COMMIT_ID,
 };
 pub use ids::{AccountId, RepositoryId, WorkspaceId};
 pub use models::{

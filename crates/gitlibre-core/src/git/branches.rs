@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, ErrorCode};
 use crate::git::executor::GitExecutor;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -159,6 +159,115 @@ pub async fn list_remote_branches(
     }
 
     Ok(parse_remote_branch_names(&out.stdout_lossy(), remote))
+}
+
+/// Check out `revision` (commit, tag, or branch). May leave HEAD detached.
+pub async fn checkout_revision(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    revision: &str,
+) -> CoreResult<()> {
+    validate_revision(revision)?;
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    let out = executor
+        .run(repo_path, &["checkout", revision])
+        .await?;
+    if !out.success() {
+        return Err(CoreError::map_git_failure(
+            &out.stderr_lossy(),
+            &out.stdout_lossy(),
+        ));
+    }
+    Ok(())
+}
+
+/// Create and check out a new branch at `revision`.
+pub async fn create_branch_at(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    name: &str,
+    revision: &str,
+) -> CoreResult<()> {
+    validate_ref_name(name, "branch")?;
+    validate_revision(revision)?;
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    let out = executor
+        .run(repo_path, &["checkout", "-b", name, revision])
+        .await?;
+    if !out.success() {
+        return Err(CoreError::map_git_failure(
+            &out.stderr_lossy(),
+            &out.stdout_lossy(),
+        ));
+    }
+    Ok(())
+}
+
+/// Create a lightweight tag at `revision`.
+pub async fn create_tag_at(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    name: &str,
+    revision: &str,
+) -> CoreResult<()> {
+    validate_ref_name(name, "tag")?;
+    validate_revision(revision)?;
+    if !repo_path.exists() {
+        return Err(CoreError::path_not_found(repo_path.display()));
+    }
+    let out = executor
+        .run(repo_path, &["tag", name, revision])
+        .await?;
+    if !out.success() {
+        return Err(CoreError::map_git_failure(
+            &out.stderr_lossy(),
+            &out.stdout_lossy(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_revision(revision: &str) -> CoreResult<()> {
+    let revision = revision.trim();
+    if revision.is_empty() || revision.contains('\0') || revision.starts_with('-') {
+        return Err(CoreError::new(ErrorCode::Internal, "Invalid revision"));
+    }
+    Ok(())
+}
+
+fn validate_ref_name(name: &str, kind: &str) -> CoreResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CoreError::new(
+            ErrorCode::Internal,
+            format!("{kind} name must not be empty"),
+        ));
+    }
+    if name.contains('\0')
+        || name.starts_with('-')
+        || name.contains("..")
+        || name.contains(' ')
+        || name.contains('\\')
+        || name.contains('~')
+        || name.contains('^')
+        || name.contains(':')
+        || name.contains('?')
+        || name.contains('*')
+        || name.contains('[')
+        || name.ends_with('.')
+        || name.ends_with('/')
+        || name.contains("@{")
+    {
+        return Err(CoreError::new(
+            ErrorCode::Internal,
+            format!("Invalid {kind} name"),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_remote_branch_names(text: &str, remote: &str) -> Vec<String> {

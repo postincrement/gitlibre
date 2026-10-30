@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { BranchInfo, CommitInfo, WorkspaceId } from "../types/models";
@@ -29,6 +30,8 @@ const GRAPH_PAD_X = 10;
 const GRAPH_PAD_Y = ROW_H / 2;
 const HEADER_H = 28;
 
+export type CommitContextAction = "checkout" | "tag" | "branch";
+
 interface CommitGraphProps {
   workspaceId: WorkspaceId;
   commits: CommitInfo[];
@@ -38,8 +41,16 @@ interface CommitGraphProps {
   loadingMore: boolean;
   hasMore: boolean;
   error: string | null;
+  actionBusy?: boolean;
   onLoadMore: () => void;
   onSelectCommit: (commit: CommitInfo) => void;
+  onCommitAction?: (action: CommitContextAction, commit: CommitInfo) => void;
+}
+
+interface CommitMenuState {
+  x: number;
+  y: number;
+  commit: CommitInfo;
 }
 
 export function CommitGraph({
@@ -51,8 +62,10 @@ export function CommitGraph({
   loadingMore,
   hasMore,
   error,
+  actionBusy = false,
   onLoadMore,
   onSelectCommit,
+  onCommitAction,
 }: CommitGraphProps) {
   const layout = useMemo(() => layoutCommitGraph(commits), [commits]);
   const [widths, setWidths] = useState<CommitGraphColumnWidths>(() =>
@@ -61,6 +74,18 @@ export function CommitGraph({
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [viewportH, setViewportH] = useState(0);
+  const [menu, setMenu] = useState<CommitMenuState | null>(null);
+
+  const openCommitMenu = useCallback(
+    (e: ReactMouseEvent, commit: CommitInfo) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isUncommittedCommit(commit) || !onCommitAction) return;
+      onSelectCommit(commit);
+      setMenu({ x: e.clientX, y: e.clientY, commit });
+    },
+    [onCommitAction, onSelectCommit],
+  );
 
   useEffect(() => {
     setWidths(loadCommitGraphColumnWidths(workspaceId));
@@ -330,6 +355,7 @@ export function CommitGraph({
                 role="button"
                 tabIndex={0}
                 onClick={() => onSelectCommit(row.commit)}
+                onContextMenu={(e) => openCommitMenu(e, row.commit)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -396,7 +422,125 @@ export function CommitGraph({
           )}
         </div>
       </div>
+
+      {menu && onCommitAction && (
+        <CommitContextMenu
+          x={menu.x}
+          y={menu.y}
+          busy={actionBusy}
+          onClose={() => setMenu(null)}
+          onCheckout={() => {
+            const commit = menu.commit;
+            setMenu(null);
+            onCommitAction("checkout", commit);
+          }}
+          onTag={() => {
+            const commit = menu.commit;
+            setMenu(null);
+            onCommitAction("tag", commit);
+          }}
+          onBranch={() => {
+            const commit = menu.commit;
+            setMenu(null);
+            onCommitAction("branch", commit);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function CommitContextMenu({
+  x,
+  y,
+  busy,
+  onClose,
+  onCheckout,
+  onTag,
+  onBranch,
+}: {
+  x: number;
+  y: number;
+  busy: boolean;
+  onClose: () => void;
+  onCheckout: () => void;
+  onTag: () => void;
+  onBranch: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - rect.width - pad);
+    }
+    if (top + rect.height > window.innerHeight - pad) {
+      top = Math.max(pad, window.innerHeight - rect.height - pad);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [x, y]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="Commit actions"
+      className="fixed z-50 min-w-40 rounded-md border border-border bg-surface-raised py-1 text-[12px] shadow-xl shadow-black/40"
+      style={{ left: x, top: y }}
+    >
+      <CommitMenuItem disabled={busy} onClick={onCheckout}>
+        Checkout
+      </CommitMenuItem>
+      <CommitMenuItem disabled={busy} onClick={onTag}>
+        Tag
+      </CommitMenuItem>
+      <CommitMenuItem disabled={busy} onClick={onBranch}>
+        Branch
+      </CommitMenuItem>
+    </div>
+  );
+}
+
+function CommitMenuItem({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      className="block w-full px-2.5 py-1 text-left text-ink hover:bg-surface-overlay disabled:opacity-50"
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -5,11 +5,11 @@ use crate::dto::{
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
-    commit_index, detect_repo_account, detect_repo_account_from_remote, discard_paths,
-    inspect_repository, list_local_branches_for_remote, push_current_branch, remove_paths,
-    resolve_repo_path, stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId,
-    AuthKind, BranchInfo, ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth,
-    RepositoryId, WorkspaceId,
+    checkout_revision, commit_index, create_branch_at, create_tag_at, detect_repo_account,
+    detect_repo_account_from_remote, discard_paths, inspect_repository,
+    list_local_branches_for_remote, push_current_branch, remove_paths, resolve_repo_path,
+    stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId, AuthKind, BranchInfo,
+    ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth, RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
@@ -586,6 +586,79 @@ pub async fn list_remote_branches(
         state.coordinator.executor(),
         &path,
         remote_name.trim(),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn checkout_repository_revision(
+    id: RepositoryId,
+    revision: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    checkout_revision(
+        state.coordinator.executor(),
+        &path,
+        revision.trim(),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn create_repository_branch(
+    id: RepositoryId,
+    name: String,
+    revision: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    create_branch_at(
+        state.coordinator.executor(),
+        &path,
+        name.trim(),
+        revision.trim(),
+    )
+    .await
+    .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn create_repository_tag(
+    id: RepositoryId,
+    name: String,
+    revision: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = {
+        let store = lock_store(&state)?;
+        store
+            .get_repository(id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
+            .path
+            .clone()
+    };
+    create_tag_at(
+        state.coordinator.executor(),
+        &path,
+        name.trim(),
+        revision.trim(),
     )
     .await
     .map_err(AppErrorDto::from)
