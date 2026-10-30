@@ -193,7 +193,7 @@ pub async fn add_repository(
         store.list_accounts().to_vec()
     };
 
-    let detection = match detect_repo_account(state.coordinator.executor(), &repo.path, &accounts)
+    let detection = match detect_repo_account(&repo.path, &accounts)
         .await
     {
         Ok(d) => Some(d),
@@ -239,7 +239,6 @@ pub async fn detect_repository_account(
     };
 
     let detected = detect_repo_account_from_remote(
-        state.coordinator.executor(),
         &path,
         &accounts,
         remote_name.as_deref(),
@@ -557,7 +556,6 @@ pub async fn list_repository_branches(
         return Ok(Vec::new());
     }
     list_local_branches_for_remote(
-        state.coordinator.executor(),
         &path,
         remote_name.as_deref(),
     )
@@ -583,7 +581,6 @@ pub async fn list_remote_branches(
         return Ok(Vec::new());
     }
     gitlibre_core::list_remote_branches(
-        state.coordinator.executor(),
         &path,
         remote_name.trim(),
     )
@@ -606,7 +603,6 @@ pub async fn checkout_repository_revision(
             .clone()
     };
     checkout_revision(
-        state.coordinator.executor(),
         &path,
         revision.trim(),
     )
@@ -630,7 +626,6 @@ pub async fn create_repository_branch(
             .clone()
     };
     create_branch_at(
-        state.coordinator.executor(),
         &path,
         name.trim(),
         revision.trim(),
@@ -655,7 +650,6 @@ pub async fn create_repository_tag(
             .clone()
     };
     create_tag_at(
-        state.coordinator.executor(),
         &path,
         name.trim(),
         revision.trim(),
@@ -682,7 +676,7 @@ pub async fn list_repository_commits(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    gitlibre_core::list_commits(state.coordinator.executor(), &path, limit, skip)
+    gitlibre_core::list_commits(&path, limit, skip)
         .await
         .map_err(AppErrorDto::from)
 }
@@ -700,7 +694,6 @@ pub async fn list_file_commits(
         return Ok(Vec::new());
     }
     gitlibre_core::list_file_commits(
-        state.coordinator.executor(),
         &repo_path,
         path.trim(),
         start_commit
@@ -725,7 +718,6 @@ pub async fn blame_file(
         return Ok(Vec::new());
     }
     gitlibre_core::blame_file(
-        state.coordinator.executor(),
         &repo_path,
         path.trim(),
         commit
@@ -755,7 +747,6 @@ pub async fn list_commit_files(
         return Ok(Vec::new());
     }
     gitlibre_core::list_commit_files(
-        state.coordinator.executor(),
         &path,
         commit.trim(),
     )
@@ -777,7 +768,6 @@ pub async fn get_commit_file_diff(
         return Ok(String::new());
     }
     gitlibre_core::get_commit_file_diff_with_old_path(
-        state.coordinator.executor(),
         &repo_path,
         commit.trim(),
         path.trim(),
@@ -824,7 +814,6 @@ pub async fn get_commit_file_preview(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let pair = gitlibre_core::get_commit_file_bytes_pair(
-        state.coordinator.executor(),
         &repo_path,
         commit.trim(),
         trimmed_path,
@@ -877,14 +866,13 @@ pub async fn stage_repository_paths(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let path = repo_path(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
             async move {
-                stage_paths(&executor, &path, &paths)
+                stage_paths(&path, &paths)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -899,14 +887,13 @@ pub async fn unstage_repository_paths(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let path = repo_path(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
             async move {
-                unstage_paths(&executor, &path, &paths)
+                unstage_paths(&path, &paths)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -922,14 +909,13 @@ pub async fn discard_repository_paths(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let path = repo_path(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
             async move {
-                discard_paths(&executor, &path, &paths, area)
+                discard_paths(&path, &paths, area)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -945,14 +931,13 @@ pub async fn remove_repository_paths(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let path = repo_path(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
             async move {
-                remove_paths(&executor, &path, &paths, area)
+                remove_paths(&path, &paths, area)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -967,14 +952,13 @@ pub async fn stop_tracking_repository_paths(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let path = repo_path(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
             async move {
-                stop_tracking_paths(&executor, &path, &paths)
+                stop_tracking_paths(&path, &paths)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -1058,7 +1042,6 @@ pub async fn commit_repository(
 ) -> CmdResult<String> {
     let path = repo_path(&state, id)?;
     let identity = resolve_commit_identity_for_repo(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     let opts = options.unwrap_or(CommitRequestOptions {
         amend: amend.unwrap_or(false),
         sign_off: false,
@@ -1077,7 +1060,6 @@ pub async fn commit_repository(
             let path = path.clone();
             async move {
                 commit_index(
-                    &executor,
                     &path,
                     &message,
                     commit_opts,
@@ -1099,7 +1081,7 @@ pub async fn read_head_commit_message(
     if !path.exists() {
         return Ok(String::new());
     }
-    gitlibre_core::read_head_commit_message(state.coordinator.executor(), &path)
+    gitlibre_core::read_head_commit_message(&path)
         .await
         .map_err(AppErrorDto::from)
 }
@@ -1111,13 +1093,12 @@ pub async fn push_repository(
 ) -> CmdResult<String> {
     let path = repo_path(&state, id)?;
     let auth = resolve_auth_for_repo(&state, id)?;
-    let executor = state.coordinator.executor().clone();
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             async move {
-                push_current_branch(&executor, &path, auth.as_ref())
+                push_current_branch(&path, auth.as_ref())
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -1203,7 +1184,7 @@ async fn status_for_repo(
         });
     }
 
-    match inspect_repository(state.coordinator.executor(), &path).await {
+    match inspect_repository(&path).await {
         Ok(info) => Ok(RepoStatusDto {
             repository_id: id,
             display_name,

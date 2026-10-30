@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Workspace, WorkspaceId } from "../types/models";
+import { formatError } from "../lib/formatError";
 
 interface WorkspaceOpenModalProps {
   workspaces: Workspace[];
@@ -246,10 +247,3 @@ function SplashAction({
   );
 }
 
-function formatError(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e) {
-    return String((e as { message: unknown }).message);
-  }
-  return "Unexpected error";
-}

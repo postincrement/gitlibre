@@ -14,6 +14,9 @@ pub mod secrets;
 pub mod ssh_config;
 pub mod store;
 
+#[cfg(test)]
+pub(crate) mod testutil;
+
 pub use auth::GitAuth;
 pub use detect::{
     detect_repo_account, detect_repo_account_from_remote, parse_remote_url, DetectedRepoAccount,
@@ -29,7 +32,7 @@ pub use git::{
     list_local_branches_for_remote, list_remote_branches, push_current_branch,
     read_commit_identity, read_head_commit_message, remove_paths, resolve_repo_path, stage_paths,
     stop_tracking_paths, unstage_paths, BlameLine, BranchInfo, ChangeArea, CommitFileChange,
-    CommitIdentity, CommitInfo, CommitOptions, FileBytesPair, GitExecutor, RemoteInfo,
+    CommitIdentity, CommitInfo, CommitOptions, FileBytesPair, RemoteInfo,
     RepoInspection, WorkingTreeStatus, UNCOMMITTED_COMMIT_ID,
 };
 pub use ids::{AccountId, RepositoryId, WorkspaceId};

@@ -1,18 +1,18 @@
 mod blame;
 mod branches;
-mod executor;
 mod identity;
 mod log;
+pub(crate) mod session;
 mod show;
 mod stage;
-mod status;
+pub(crate) mod status;
+pub(crate) mod transport;
 
 pub use blame::{blame_file, BlameLine};
 pub use branches::{
     checkout_revision, create_branch_at, create_tag_at, list_local_branches,
     list_local_branches_for_remote, list_remote_branches, BranchInfo,
 };
-pub use executor::{GitExecutor, GitOutput};
 pub use identity::{read_commit_identity, CommitIdentity};
 pub use log::{list_commits, list_file_commits, CommitInfo};
 pub use show::{

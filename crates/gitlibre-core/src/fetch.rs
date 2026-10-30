@@ -1,6 +1,6 @@
 use crate::auth::GitAuth;
 use crate::error::{CoreError, ErrorCode};
-use crate::git::GitExecutor;
+use crate::git::transport;
 use crate::ids::RepositoryId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -57,26 +57,20 @@ impl RepoLockGate {
 /// Coordinates individual and workspace-wide fetches with bounded concurrency
 /// and per-canonical-path mutual exclusion.
 pub struct FetchCoordinator {
-    executor: GitExecutor,
     semaphore: Arc<Semaphore>,
     locks: Arc<RepoLockGate>,
 }
 
 impl FetchCoordinator {
-    pub fn new(executor: GitExecutor) -> Self {
-        Self::with_concurrency(executor, DEFAULT_CONCURRENCY)
+    pub fn new() -> Self {
+        Self::with_concurrency(DEFAULT_CONCURRENCY)
     }
 
-    pub fn with_concurrency(executor: GitExecutor, concurrency: usize) -> Self {
+    pub fn with_concurrency(concurrency: usize) -> Self {
         Self {
-            executor,
             semaphore: Arc::new(Semaphore::new(concurrency.max(1))),
             locks: Arc::new(RepoLockGate::new()),
         }
-    }
-
-    pub fn executor(&self) -> &GitExecutor {
-        &self.executor
     }
 
     /// Run `f` while holding the per-repo mutex (same gate as fetch).
@@ -136,81 +130,48 @@ impl FetchCoordinator {
             }
         };
 
-        // Ensure at least one remote exists.
-        match self.executor.run(repo_path, &["remote"]).await {
-            Ok(out) if out.success() => {
-                if out.stdout_lossy().trim().is_empty() {
-                    return FetchOutcome {
-                        repository_id,
-                        success: false,
-                        summary: "No remotes configured".into(),
-                        error: Some(CoreError::new(
-                            ErrorCode::NoRemotes,
-                            "No remotes configured for this repository.",
-                        )),
-                    };
-                }
-            }
-            Ok(out) => {
-                return FetchOutcome {
-                    repository_id,
-                    success: false,
-                    summary: out.stderr_lossy(),
-                    error: Some(CoreError::process_failed(out.stderr_lossy())),
-                };
-            }
-            Err(e) => {
-                return FetchOutcome {
-                    repository_id,
-                    success: false,
-                    summary: e.message.clone(),
-                    error: Some(e),
-                };
-            }
-        }
-
         let progress_id = repository_id;
-        let auth_ref = auth.as_ref();
-        let result = self
-            .executor
-            .run_with_stderr_progress_auth(
-                repo_path,
-                &["fetch", "--all", "--progress"],
-                auth_ref,
-                |msg| {
-                    on_progress(FetchProgress {
-                        repository_id: progress_id,
-                        message: msg,
-                    });
-                },
-            )
-            .await;
+        let path = repo_path.to_path_buf();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let fetch_auth = auth.clone();
+        let handle = tokio::task::spawn_blocking(move || {
+            transport::fetch_all(&path, fetch_auth.as_ref(), |message| {
+                let _ = tx.send(message);
+            })
+        });
+        while let Some(message) = rx.recv().await {
+            on_progress(FetchProgress {
+                repository_id: progress_id,
+                message,
+            });
+        }
+        let result = match handle.await {
+            Ok(result) => result,
+            Err(err) => Err(CoreError::process_failed(format!("Fetch task failed: {err}"))),
+        };
 
         match result {
-            Ok(out) if out.success() => FetchOutcome {
+            Ok(run) => FetchOutcome {
                 repository_id,
                 success: true,
-                summary: if out.stderr_lossy().trim().is_empty() {
+                summary: if run.summary.trim().is_empty() {
                     "Fetch completed".into()
                 } else {
-                    out.stderr_lossy().trim().lines().last().unwrap_or("Fetch completed").to_string()
+                    run.summary
                 },
                 error: None,
             },
-            Ok(out) => {
-                let err = CoreError::map_git_failure(&out.stderr_lossy(), &out.stdout_lossy());
-                FetchOutcome {
-                    repository_id,
-                    success: false,
-                    summary: err.message.clone(),
-                    error: Some(err),
-                }
-            }
-            Err(e) => FetchOutcome {
+            Err(err) if err.code == ErrorCode::NoRemotes => FetchOutcome {
                 repository_id,
                 success: false,
-                summary: e.message.clone(),
-                error: Some(e),
+                summary: err.message.clone(),
+                error: Some(err),
+            },
+            Err(err) => FetchOutcome {
+                repository_id,
+                success: false,
+                summary: err.message.clone(),
+                error: Some(err),
             },
         }
     }
@@ -280,7 +241,6 @@ impl FetchCoordinator {
 
     fn clone_handles(&self) -> Self {
         Self {
-            executor: self.executor.clone(),
             semaphore: Arc::clone(&self.semaphore),
             locks: Arc::clone(&self.locks),
         }
@@ -290,49 +250,15 @@ impl FetchCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
     use std::fs;
-    use std::process::Command;
     use tempfile::tempdir;
-
-    fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn setup_repo_with_bare_remote(root: &Path) -> (PathBuf, PathBuf) {
-        let bare = root.join("remote.git");
-        let local = root.join("local");
-        fs::create_dir_all(&local).unwrap();
-        git(root, &["init", "--bare", bare.to_str().unwrap()]);
-        git(&local, &["init", "-b", "main"]);
-        git(&local, &["config", "user.email", "test@example.com"]);
-        git(&local, &["config", "user.name", "Test"]);
-        fs::write(local.join("file.txt"), "v1").unwrap();
-        git(&local, &["add", "file.txt"]);
-        git(&local, &["commit", "-m", "init"]);
-        git(
-            &local,
-            &[
-                "remote",
-                "add",
-                "origin",
-                bare.to_str().unwrap(),
-            ],
-        );
-        git(&local, &["push", "-u", "origin", "main"]);
-        (local, bare)
-    }
 
     #[tokio::test]
     async fn fetch_success_and_no_remotes_failure() {
         let dir = tempdir().unwrap();
-        let (local, _bare) = setup_repo_with_bare_remote(dir.path());
-        let executor = GitExecutor::from_path().unwrap();
-        let coordinator = FetchCoordinator::new(executor);
+        let (local, _bare) = testutil::setup_local_and_bare(dir.path());
+        let coordinator = FetchCoordinator::new();
 
         let id = RepositoryId::new();
         let ok = coordinator
@@ -342,7 +268,7 @@ mod tests {
 
         let lonely = dir.path().join("lonely");
         fs::create_dir(&lonely).unwrap();
-        git(&lonely, &["init"]);
+        testutil::init_repo(&lonely);
         let fail = coordinator
             .fetch_one(RepositoryId::new(), &lonely, |_| {})
             .await;
@@ -356,12 +282,12 @@ mod tests {
     #[tokio::test]
     async fn workspace_fetch_mixed_outcomes() {
         let dir = tempdir().unwrap();
-        let (good, _) = setup_repo_with_bare_remote(dir.path());
+        let (good, _) = testutil::setup_local_and_bare(dir.path());
         let bad = dir.path().join("bad");
         fs::create_dir(&bad).unwrap();
-        git(&bad, &["init"]);
+        testutil::init_repo(&bad);
 
-        let coordinator = FetchCoordinator::new(GitExecutor::from_path().unwrap());
+        let coordinator = FetchCoordinator::new();
         let repos = vec![
             (RepositoryId::new(), good),
             (RepositoryId::new(), bad),

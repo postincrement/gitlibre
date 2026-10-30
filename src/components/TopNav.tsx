@@ -4,6 +4,7 @@ interface TopNavProps {
   workspaceName: string | null;
   repoName: string | null;
   canFetchRepo: boolean;
+  repoHasAccount: boolean;
   repoFetching: boolean;
   busy: boolean;
   onCommit: () => void;
@@ -16,6 +17,7 @@ export function TopNav({
   workspaceName,
   repoName,
   canFetchRepo,
+  repoHasAccount,
   repoFetching,
   busy,
   onCommit,
@@ -29,6 +31,7 @@ export function TopNav({
       : (workspaceName ?? undefined);
 
   const repoActionsDisabled = !canFetchRepo || busy || repoFetching;
+  const syncDisabled = repoActionsDisabled || !repoHasAccount;
 
   return (
     <header className="flex h-[4.25rem] shrink-0 items-center gap-3 border-b border-border bg-surface-raised/90 px-4 backdrop-blur">
@@ -68,12 +71,22 @@ export function TopNav({
           />
           <ToolbarIconButton
             label="Push"
-            disabled={repoActionsDisabled}
+            disabled={syncDisabled}
+            title={
+              repoHasAccount
+                ? undefined
+                : "Assign an account to push this repository"
+            }
             icon={<IconArrowUp />}
           />
           <ToolbarIconButton
             label={repoFetching ? "Fetching…" : "Fetch"}
-            disabled={repoActionsDisabled}
+            disabled={syncDisabled}
+            title={
+              repoHasAccount
+                ? undefined
+                : "Assign an account to fetch this repository"
+            }
             dashed
             onClick={onFetchRepo}
             icon={<IconArrowDown />}
@@ -116,21 +129,23 @@ function ToolbarIconButton({
   onClick,
   disabled,
   dashed,
+  title,
 }: {
   label: string;
   icon: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   dashed?: boolean;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={label}
+      title={title ?? label}
       className={[
-        "group flex w-12 flex-col items-center gap-0.5 rounded-md px-0.5 py-0.5",
+        "repo-toolbar-btn group flex w-12 flex-col items-center gap-0.5 rounded-md px-0.5 py-0.5",
         "text-ink-muted transition-colors",
         "enabled:hover:text-ink enabled:focus-visible:outline enabled:focus-visible:outline-2 enabled:focus-visible:outline-offset-2 enabled:focus-visible:outline-accent",
         "disabled:cursor-not-allowed disabled:opacity-40",
@@ -138,7 +153,7 @@ function ToolbarIconButton({
     >
       <span
         className={[
-          "flex h-8 w-8 items-center justify-center rounded-full border bg-surface-overlay/80",
+          "repo-toolbar-glyph flex h-8 w-8 items-center justify-center rounded-full border bg-surface-overlay/80",
           dashed
             ? "border-dashed border-ink-muted group-enabled:group-hover:border-ink"
             : "border-solid border-border group-enabled:group-hover:border-ink-muted",

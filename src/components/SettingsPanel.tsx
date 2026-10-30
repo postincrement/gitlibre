@@ -45,6 +45,7 @@ const STATUS_COLOR_FIELDS: {
   { key: "repoChanges", label: "Repo changes badge", letter: "3" },
   { key: "branch", label: "Branch badge", letter: "b" },
   { key: "branchDivergence", label: "Ahead / behind", letter: "↑" },
+  { key: "tag", label: "Tag badge", letter: "t" },
 ];
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {

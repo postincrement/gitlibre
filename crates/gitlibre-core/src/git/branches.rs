@@ -1,5 +1,5 @@
 use crate::error::{CoreError, CoreResult, ErrorCode};
-use crate::git::executor::GitExecutor;
+use crate::git::session::{blocking, map_git2, open_repo, string_list};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -22,213 +22,194 @@ pub struct BranchInfo {
 ///
 /// `remote_name` selects which remote to compare against. When `None`, prefers
 /// `origin`, else the first configured remote.
-pub async fn list_local_branches(
-    executor: &GitExecutor,
-    repo_path: &Path,
-) -> CoreResult<Vec<BranchInfo>> {
-    list_local_branches_for_remote(executor, repo_path, None).await
+pub async fn list_local_branches(repo_path: &Path) -> CoreResult<Vec<BranchInfo>> {
+    list_local_branches_for_remote(repo_path, None).await
 }
 
 pub async fn list_local_branches_for_remote(
-    executor: &GitExecutor,
     repo_path: &Path,
     remote_name: Option<&str>,
 ) -> CoreResult<Vec<BranchInfo>> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
     }
+    let path = repo_path.to_path_buf();
+    let remote_name = remote_name.map(str::to_string);
+    blocking(move || list_local_branches_at(&path, remote_name.as_deref())).await
+}
 
-    let out = executor
-        .run(
-            repo_path,
-            &[
-                "for-each-ref",
-                "--format=%(refname:short)%09%(HEAD)",
-                "refs/heads",
-            ],
-        )
-        .await?;
-
-    if !out.success() {
-        return Err(CoreError::process_failed(format!(
-            "git for-each-ref failed: {}",
-            out.stderr_lossy().trim()
-        )));
+fn list_local_branches_at(repo_path: &Path, remote_name: Option<&str>) -> CoreResult<Vec<BranchInfo>> {
+    let repo = open_repo(repo_path)?;
+    let head_name = repo
+        .head()
+        .ok()
+        .filter(|head| head.is_branch())
+        .and_then(|head| head.shorthand().ok().map(str::to_string));
+    let mut branches = Vec::new();
+    for branch in repo.branches(Some(git2::BranchType::Local)).map_err(map_git2)? {
+        let (branch, _) = branch.map_err(map_git2)?;
+        let Some(name) = branch.name().map_err(map_git2)? else {
+            continue;
+        };
+        let name = name.to_string();
+        branches.push(BranchInfo {
+            is_current: head_name.as_deref() == Some(name.as_str()),
+            behind: None,
+            ahead: None,
+            name,
+        });
     }
-
-    let mut branches = parse_for_each_ref_heads(&out.stdout_lossy());
-    let remote = resolve_compare_remote(executor, repo_path, remote_name).await?;
-
-    if let Some(remote) = remote.as_deref() {
+    branches.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    if let Some(remote) = resolve_compare_remote(&repo, remote_name)? {
         for branch in &mut branches {
-            let (behind, ahead) =
-                count_ahead_behind(executor, repo_path, &branch.name, remote).await?;
+            let (behind, ahead) = count_ahead_behind(&repo, &branch.name, &remote)?;
             branch.behind = behind;
             branch.ahead = ahead;
         }
     }
-
     Ok(branches)
 }
 
-async fn resolve_compare_remote(
-    executor: &GitExecutor,
-    repo_path: &Path,
+fn resolve_compare_remote(
+    repo: &git2::Repository,
     remote_name: Option<&str>,
 ) -> CoreResult<Option<String>> {
-    let out = executor.run(repo_path, &["remote"]).await?;
-    if !out.success() {
-        return Ok(None);
-    }
-    let remotes: Vec<String> = out
-        .stdout_lossy()
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
+    let names = repo.remotes().map_err(map_git2)?;
+    let remotes = string_list(&names);
     if remotes.is_empty() {
         return Ok(None);
     }
     if let Some(wanted) = remote_name {
-        if remotes.iter().any(|r| r == wanted) {
+        if remotes.iter().any(|remote| remote == wanted) {
             return Ok(Some(wanted.to_string()));
         }
     }
-    if let Some(origin) = remotes.iter().find(|r| *r == "origin") {
+    if let Some(origin) = remotes.iter().find(|remote| remote.as_str() == "origin") {
         return Ok(Some(origin.clone()));
     }
     Ok(remotes.into_iter().next())
 }
 
-async fn count_ahead_behind(
-    executor: &GitExecutor,
-    repo_path: &Path,
+fn count_ahead_behind(
+    repo: &git2::Repository,
     branch: &str,
     remote: &str,
 ) -> CoreResult<(Option<u32>, Option<u32>)> {
     let remote_ref = format!("refs/remotes/{remote}/{branch}");
-    let verify = executor
-        .run(repo_path, &["rev-parse", "--verify", "--quiet", &remote_ref])
-        .await?;
-    if !verify.success() {
-        return Ok((None, None));
-    }
-
-    // left = commits only on local (ahead), right = commits only on remote (behind)
-    let range = format!("{branch}...{remote}/{branch}");
-    let out = executor
-        .run(repo_path, &["rev-list", "--left-right", "--count", &range])
-        .await?;
-    if !out.success() {
-        return Ok((None, None));
-    }
-    Ok(parse_left_right_count(&out.stdout_lossy()))
+    let remote_oid = match repo.find_reference(&remote_ref) {
+        Ok(reference) => match reference.peel_to_commit() {
+            Ok(commit) => commit.id(),
+            Err(_) => return Ok((None, None)),
+        },
+        Err(_) => return Ok((None, None)),
+    };
+    let local_oid = match repo.find_reference(&format!("refs/heads/{branch}")) {
+        Ok(reference) => match reference.peel_to_commit() {
+            Ok(commit) => commit.id(),
+            Err(_) => return Ok((None, None)),
+        },
+        Err(_) => return Ok((None, None)),
+    };
+    let (ahead, behind) = repo
+        .graph_ahead_behind(local_oid, remote_oid)
+        .map_err(map_git2)?;
+    Ok((Some(behind as u32), Some(ahead as u32)))
 }
 
 /// List remote-tracking branches for `remote`, as paths relative to that remote
 /// (e.g. `main`, `feature/x` — not `origin/main`).
-pub async fn list_remote_branches(
-    executor: &GitExecutor,
-    repo_path: &Path,
-    remote: &str,
-) -> CoreResult<Vec<String>> {
+pub async fn list_remote_branches(repo_path: &Path, remote: &str) -> CoreResult<Vec<String>> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
     }
     if remote.is_empty() || remote.contains('/') || remote.contains('\\') {
         return Err(CoreError::new(
-            crate::error::ErrorCode::Internal,
+            ErrorCode::Internal,
             format!("Invalid remote name: {remote}"),
         ));
     }
+    let path = repo_path.to_path_buf();
+    let remote = remote.to_string();
+    blocking(move || list_remote_branches_at(&path, &remote)).await
+}
 
-    let prefix = format!("refs/remotes/{remote}");
-    let out = executor
-        .run(
-            repo_path,
-            &["for-each-ref", "--format=%(refname:lstrip=3)", &prefix],
-        )
-        .await?;
-
-    if !out.success() {
-        return Err(CoreError::process_failed(format!(
-            "git for-each-ref failed: {}",
-            out.stderr_lossy().trim()
-        )));
+fn list_remote_branches_at(repo_path: &Path, remote: &str) -> CoreResult<Vec<String>> {
+    let repo = open_repo(repo_path)?;
+    let prefix = format!("refs/remotes/{remote}/");
+    let mut names = Vec::new();
+    for reference in repo.references().map_err(map_git2)?.flatten() {
+        let Ok(name) = reference.name() else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.is_empty() || rest == "HEAD" {
+            continue;
+        }
+        names.push(rest.to_string());
     }
-
-    Ok(parse_remote_branch_names(&out.stdout_lossy(), remote))
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    names.dedup();
+    Ok(names)
 }
 
 /// Check out `revision` (commit, tag, or branch). May leave HEAD detached.
-pub async fn checkout_revision(
-    executor: &GitExecutor,
-    repo_path: &Path,
-    revision: &str,
-) -> CoreResult<()> {
+pub async fn checkout_revision(repo_path: &Path, revision: &str) -> CoreResult<()> {
     validate_revision(revision)?;
-    if !repo_path.exists() {
-        return Err(CoreError::path_not_found(repo_path.display()));
-    }
-    let out = executor
-        .run(repo_path, &["checkout", revision])
-        .await?;
-    if !out.success() {
-        return Err(CoreError::map_git_failure(
-            &out.stderr_lossy(),
-            &out.stdout_lossy(),
-        ));
-    }
-    Ok(())
+    let path = repo_path.to_path_buf();
+    let revision = revision.trim().to_string();
+    blocking(move || {
+        let repo = open_repo(&path)?;
+        let (object, reference) = repo.revparse_ext(&revision).map_err(map_git2)?;
+        repo.checkout_tree(&object, Some(git2::build::CheckoutBuilder::new().force()))
+            .map_err(map_git2)?;
+        if let Some(reference) = reference.filter(|reference| reference.is_branch()) {
+            let name = reference.name().map_err(map_git2)?;
+            repo.set_head(name).map_err(map_git2)?;
+        } else {
+            repo.set_head_detached(object.id()).map_err(map_git2)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Create and check out a new branch at `revision`.
-pub async fn create_branch_at(
-    executor: &GitExecutor,
-    repo_path: &Path,
-    name: &str,
-    revision: &str,
-) -> CoreResult<()> {
+pub async fn create_branch_at(repo_path: &Path, name: &str, revision: &str) -> CoreResult<()> {
     validate_ref_name(name, "branch")?;
     validate_revision(revision)?;
-    if !repo_path.exists() {
-        return Err(CoreError::path_not_found(repo_path.display()));
-    }
-    let out = executor
-        .run(repo_path, &["checkout", "-b", name, revision])
-        .await?;
-    if !out.success() {
-        return Err(CoreError::map_git_failure(
-            &out.stderr_lossy(),
-            &out.stdout_lossy(),
-        ));
-    }
-    Ok(())
+    let path = repo_path.to_path_buf();
+    let name = name.trim().to_string();
+    let revision = revision.trim().to_string();
+    blocking(move || {
+        let repo = open_repo(&path)?;
+        let target = repo.revparse_single(&revision).map_err(map_git2)?;
+        let commit = target.peel_to_commit().map_err(map_git2)?;
+        repo.branch(&name, &commit, false).map_err(map_git2)?;
+        let refname = format!("refs/heads/{name}");
+        repo.set_head(&refname).map_err(map_git2)?;
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .map_err(map_git2)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Create a lightweight tag at `revision`.
-pub async fn create_tag_at(
-    executor: &GitExecutor,
-    repo_path: &Path,
-    name: &str,
-    revision: &str,
-) -> CoreResult<()> {
+pub async fn create_tag_at(repo_path: &Path, name: &str, revision: &str) -> CoreResult<()> {
     validate_ref_name(name, "tag")?;
     validate_revision(revision)?;
-    if !repo_path.exists() {
-        return Err(CoreError::path_not_found(repo_path.display()));
-    }
-    let out = executor
-        .run(repo_path, &["tag", name, revision])
-        .await?;
-    if !out.success() {
-        return Err(CoreError::map_git_failure(
-            &out.stderr_lossy(),
-            &out.stdout_lossy(),
-        ));
-    }
-    Ok(())
+    let path = repo_path.to_path_buf();
+    let name = name.trim().to_string();
+    let revision = revision.trim().to_string();
+    blocking(move || {
+        let repo = open_repo(&path)?;
+        let object = repo.revparse_single(&revision).map_err(map_git2)?;
+        repo.tag_lightweight(&name, &object, false).map_err(map_git2)?;
+        Ok(())
+    })
+    .await
 }
 
 fn validate_revision(revision: &str) -> CoreResult<()> {
@@ -270,6 +251,7 @@ fn validate_ref_name(name: &str, kind: &str) -> CoreResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn parse_remote_branch_names(text: &str, remote: &str) -> Vec<String> {
     let head_symlink = format!("{remote}/HEAD");
     let mut names: Vec<String> = text
@@ -295,6 +277,7 @@ fn parse_remote_branch_names(text: &str, remote: &str) -> Vec<String> {
     names
 }
 
+#[cfg(test)]
 fn parse_left_right_count(text: &str) -> (Option<u32>, Option<u32>) {
     let parts: Vec<&str> = text.trim().split_whitespace().collect();
     if parts.len() < 2 {
@@ -305,6 +288,7 @@ fn parse_left_right_count(text: &str) -> (Option<u32>, Option<u32>) {
     (behind, ahead)
 }
 
+#[cfg(test)]
 fn parse_for_each_ref_heads(text: &str) -> Vec<BranchInfo> {
     let mut branches: Vec<BranchInfo> = text
         .lines()
@@ -336,8 +320,8 @@ fn parse_for_each_ref_heads(text: &str) -> Vec<BranchInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
     use std::fs;
-    use std::process::Command;
     use tempfile::tempdir;
 
     #[test]
@@ -357,46 +341,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let repo = dir.path().join("repo");
         fs::create_dir(&repo).unwrap();
-        assert!(Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        fs::write(repo.join("README"), "hi").unwrap();
-        assert!(Command::new("git")
-            .args(["add", "README"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["branch", "develop"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
+        let git_repo = testutil::init_repo(&repo);
+        testutil::commit_file(&git_repo, "README", "hi", "init");
+        let head = git_repo.head().unwrap().peel_to_commit().unwrap();
+        git_repo.branch("develop", &head, false).unwrap();
 
-        let executor = GitExecutor::from_path().unwrap();
-        let branches = list_local_branches(&executor, &repo).await.unwrap();
+        let branches = list_local_branches(&repo).await.unwrap();
         assert!(branches.iter().any(|b| b.name == "main" && b.is_current));
         assert!(branches.iter().any(|b| b.name == "develop" && !b.is_current));
         assert!(branches.iter().all(|b| b.behind.is_none() && b.ahead.is_none()));
@@ -418,99 +368,24 @@ mod tests {
     #[tokio::test]
     async fn behind_counts_against_remote_tracking_branch() {
         let dir = tempdir().unwrap();
-        let bare = dir.path().join("remote.git");
-        let repo = dir.path().join("repo");
-        assert!(Command::new("git")
-            .args(["init", "--bare", "-b", "main"])
-            .arg(&bare)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["clone", bare.to_str().unwrap(), repo.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        fs::write(repo.join("a.txt"), "1").unwrap();
-        assert!(Command::new("git")
-            .args(["add", "a.txt"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["commit", "-m", "one"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["push", "-u", "origin", "main"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
+        let repo_path = dir.path().join("repo");
+        fs::create_dir(&repo_path).unwrap();
+        let repo = testutil::init_repo(&repo_path);
+        let first = testutil::commit_file(&repo, "a.txt", "1", "one");
+        let second = testutil::commit_file(&repo, "b.txt", "2", "two");
+        let first_commit = repo.find_commit(first).unwrap();
+        repo.reset(first_commit.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
+        repo.reference(
+            "refs/remotes/origin/main",
+            second,
+            true,
+            "test upstream",
+        )
+        .unwrap();
+        repo.remote("origin", repo_path.to_str().unwrap()).unwrap();
 
-        // Advance origin/main without updating local tip: fetch after amending remote
-        // via a second clone.
-        let other = dir.path().join("other");
-        assert!(Command::new("git")
-            .args(["clone", bare.to_str().unwrap(), other.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(&other)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&other)
-            .status()
-            .unwrap()
-            .success());
-        fs::write(other.join("b.txt"), "2").unwrap();
-        assert!(Command::new("git")
-            .args(["add", "b.txt"])
-            .current_dir(&other)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["commit", "-m", "two"])
-            .current_dir(&other)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["push", "origin", "main"])
-            .current_dir(&other)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["fetch", "origin"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-
-        let executor = GitExecutor::from_path().unwrap();
-        let branches = list_local_branches_for_remote(&executor, &repo, Some("origin"))
+        let branches = list_local_branches_for_remote(&repo_path, Some("origin"))
             .await
             .unwrap();
         let main = branches.iter().find(|b| b.name == "main").unwrap();

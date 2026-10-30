@@ -378,16 +378,10 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::models::CONFIG_VERSION;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn init_git_repo(dir: &Path) {
-        let status = Command::new("git")
-            .args(["init"])
-            .current_dir(dir)
-            .status()
-            .expect("git init");
-        assert!(status.success());
+        git2::Repository::init(dir).expect("init repo");
     }
 
     #[test]

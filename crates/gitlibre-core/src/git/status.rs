@@ -1,6 +1,7 @@
-use crate::error::{CoreError, CoreResult};
-use crate::git::executor::GitExecutor;
-use crate::git::identity::read_commit_identity;
+use crate::error::CoreResult;
+use crate::git::session::string_list;
+use crate::git::identity::read_commit_identity_at;
+use crate::git::session::{blocking, map_git2, open_repo};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -54,61 +55,104 @@ pub struct RepoInspection {
     pub commit_identity_is_local: bool,
 }
 
-/// Inspect a local Git repository using porcelain v2 status and related commands.
-pub async fn inspect_repository(
-    executor: &GitExecutor,
-    repo_path: &Path,
-) -> CoreResult<RepoInspection> {
-    if !repo_path.exists() {
-        return Err(CoreError::path_not_found(repo_path.display()));
-    }
+/// Inspect a local Git repository.
+pub async fn inspect_repository(repo_path: &Path) -> CoreResult<RepoInspection> {
+    let path = repo_path.to_path_buf();
+    blocking(move || inspect_repository_at(&path)).await
+}
 
-    let git_meta = repo_path.join(".git");
-    if !git_meta.exists() {
-        return Err(CoreError::not_a_git_repository(repo_path.display()));
-    }
-
-    let status_out = executor
-        .run(repo_path, &["status", "--porcelain=v2", "--branch", "-z"])
-        .await?;
-    if !status_out.success() {
-        return Err(CoreError::process_failed(format!(
-            "git status failed: {}",
-            status_out.stderr_lossy()
-        )));
-    }
-
-    let parsed = parse_porcelain_v2(&status_out.stdout);
-
-    let branch_out = executor
-        .run(repo_path, &["branch", "--show-current"])
-        .await?;
-    let current_branch = if branch_out.success() {
-        let name = branch_out.stdout_lossy().trim().to_string();
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
-    } else {
-        parsed.branch.clone()
-    };
-
-    let detached_head = current_branch.is_none() && parsed.head_oid.is_some();
-
-    let remotes = list_remotes(executor, repo_path).await?;
-    let identity = read_commit_identity(executor, repo_path).await?;
-
+fn inspect_repository_at(repo_path: &Path) -> CoreResult<RepoInspection> {
+    let repo = open_repo(repo_path)?;
+    let (current_branch, detached_head) = head_branch(&repo)?;
+    let remotes = remote_infos(&repo)?;
+    let identity = read_commit_identity_at(repo_path)?;
     Ok(RepoInspection {
-        current_branch: current_branch.or(parsed.branch),
+        current_branch,
         detached_head,
         remotes,
-        working_tree: parsed.working_tree,
-        upstream: parsed.upstream,
+        working_tree: working_tree_status(&repo)?,
+        upstream: upstream_name(&repo),
         commit_name: identity.name,
         commit_email: identity.email,
         commit_identity_is_local: identity.is_local,
     })
+}
+
+fn head_branch(repo: &git2::Repository) -> CoreResult<(Option<String>, bool)> {
+    match repo.head() {
+        Ok(head) if head.is_branch() => Ok((head.shorthand().ok().map(str::to_string), false)),
+        Ok(_) => Ok((None, true)),
+        Err(err) if err.code() == git2::ErrorCode::UnbornBranch => Ok((None, false)),
+        Err(err) if err.code() == git2::ErrorCode::NotFound => Ok((None, false)),
+        Err(err) => Err(map_git2(err)),
+    }
+}
+
+fn upstream_name(repo: &git2::Repository) -> Option<String> {
+    let head = repo.head().ok()?;
+    let name = head.shorthand().ok()?;
+    let branch = repo.find_branch(name, git2::BranchType::Local).ok()?;
+    let upstream = branch.upstream().ok()?;
+    upstream.name().ok().flatten().map(str::to_string)
+}
+
+pub(crate) fn remote_infos(repo: &git2::Repository) -> CoreResult<Vec<RemoteInfo>> {
+    let names = repo.remotes().map_err(map_git2)?;
+    let mut remotes = Vec::new();
+    for name in string_list(&names) {
+        let remote = repo.find_remote(&name).map_err(map_git2)?;
+        let fetch_url = remote.url().unwrap_or("").to_string();
+        let push_url = remote
+            .pushurl()
+            .ok()
+            .flatten()
+            .unwrap_or(fetch_url.as_str())
+            .to_string();
+        remotes.push(RemoteInfo {
+            name,
+            fetch_url,
+            push_url,
+        });
+    }
+    Ok(remotes)
+}
+
+fn working_tree_status(repo: &git2::Repository) -> CoreResult<WorkingTreeStatus> {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .renames_head_to_index(true)
+        .renames_index_to_workdir(true)
+        .exclude_submodules(false);
+    let statuses = repo.statuses(Some(&mut opts)).map_err(map_git2)?;
+    let mut working_tree = WorkingTreeStatus::default();
+    for entry in statuses.iter() {
+        let status = entry.status();
+        if status.is_conflicted() {
+            working_tree.conflicted += 1;
+            continue;
+        }
+        if status.is_wt_new() {
+            working_tree.untracked += 1;
+            continue;
+        }
+        if status.is_index_renamed() || status.is_wt_renamed() {
+            working_tree.renamed += 1;
+            continue;
+        }
+        if status.is_index_new() {
+            working_tree.added += 1;
+        } else if status.is_index_deleted() || status.is_wt_deleted() {
+            working_tree.deleted += 1;
+        } else if status.is_index_modified()
+            || status.is_wt_modified()
+            || status.is_index_typechange()
+            || status.is_wt_typechange()
+        {
+            working_tree.modified += 1;
+        }
+    }
+    Ok(working_tree)
 }
 
 #[derive(Debug, Default)]
@@ -196,53 +240,11 @@ fn classify_xy(x: u8, y: u8, wt: &mut WorkingTreeStatus) {
     }
 }
 
-async fn list_remotes(executor: &GitExecutor, repo_path: &Path) -> CoreResult<Vec<RemoteInfo>> {
-    let out = executor.run(repo_path, &["remote", "-v"]).await?;
-    if !out.success() {
-        return Err(CoreError::process_failed(format!(
-            "git remote failed: {}",
-            out.stderr_lossy()
-        )));
-    }
-    Ok(parse_remotes(&out.stdout_lossy()))
-}
-
-fn parse_remotes(text: &str) -> Vec<RemoteInfo> {
-    use std::collections::BTreeMap;
-    let mut map: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
-    for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let name = parts[0].to_string();
-        let url = parts[1].to_string();
-        let kind = parts[2];
-        let entry = map.entry(name).or_insert((None, None));
-        if kind.contains("fetch") {
-            entry.0 = Some(url);
-        } else if kind.contains("push") {
-            entry.1 = Some(url);
-        }
-    }
-    map.into_iter()
-        .map(|(name, (fetch, push))| {
-            let fetch_url = fetch.clone().unwrap_or_default();
-            let push_url = push.unwrap_or_else(|| fetch.unwrap_or_default());
-            RemoteInfo {
-                name,
-                fetch_url,
-                push_url,
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
     use std::fs;
-    use std::process::Command;
     use tempfile::tempdir;
 
     #[test]
@@ -271,41 +273,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let repo = dir.path().join("repo");
         fs::create_dir(&repo).unwrap();
-        assert!(Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        fs::write(repo.join("README"), "hi").unwrap();
-        assert!(Command::new("git")
-            .args(["add", "README"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
+        let git_repo = testutil::init_repo(&repo);
+        testutil::commit_file(&git_repo, "README", "hi", "init");
         fs::write(repo.join("dirty.txt"), "x").unwrap();
 
-        let executor = GitExecutor::from_path().unwrap();
-        let info = inspect_repository(&executor, &repo).await.unwrap();
+        let info = inspect_repository(&repo).await.unwrap();
         assert_eq!(info.current_branch.as_deref(), Some("main"));
         assert!(!info.detached_head);
         assert!(info.working_tree.untracked >= 1);

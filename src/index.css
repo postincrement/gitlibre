@@ -65,6 +65,8 @@ html {
   --status-branch-fg: #1a1200;
   --status-branch-divergence: #003a79;
   --status-branch-divergence-fg: #ffffff;
+  --status-tag: #ffded5;
+  --status-tag-fg: #1a1200;
 }
 
 html.light {
@@ -137,6 +139,22 @@ select {
 select option {
   background-color: var(--color-surface-raised);
   color: var(--color-ink);
+}
+
+/* Repository action toolbar: icons sit on a dark chrome and need a lighter edge. */
+html.dark .repo-toolbar-btn:not(:disabled) {
+  color: #f7f9fc;
+}
+
+html.dark .repo-toolbar-btn:not(:disabled) .repo-toolbar-glyph {
+  background: #3a4558;
+  border-color: #d5deea;
+  color: #f7f9fc;
+}
+
+html.dark .repo-toolbar-btn:not(:disabled):hover .repo-toolbar-glyph {
+  background: #46536a;
+  border-color: #ffffff;
 }
 
 .btn-primary {

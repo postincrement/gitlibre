@@ -8,6 +8,7 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 import type { ContentViewMode } from "../lib/contentView";
 import {
   UNCOMMITTED_COMMIT_ID,
@@ -121,7 +122,7 @@ export function RepoDetail({
     } catch (e) {
       setCommits([]);
       setHasMore(false);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
     } finally {
       setLoading(false);
     }
@@ -145,7 +146,7 @@ export function RepoDetail({
       });
       setHasMore(more);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
       setHasMore(false);
     } finally {
       loadingMoreRef.current = false;
@@ -206,7 +207,7 @@ export function RepoDetail({
         if (!cancelled) {
           setHasUncommittedFiles(false);
           setStatusFiles([]);
-          setStatusFilesError(e instanceof Error ? e.message : String(e));
+          setStatusFilesError(formatError(e));
           setStatusFilesLoading(false);
           setWorkingTreeReady(true);
         }
@@ -341,7 +342,7 @@ export function RepoDetail({
       } catch (e) {
         if (!cancelled) {
           setFiles([]);
-          setFilesError(e instanceof Error ? e.message : String(e));
+          setFilesError(formatError(e));
           setFilesLoading(false);
         }
       }

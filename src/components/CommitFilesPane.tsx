@@ -16,10 +16,12 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 import {
   formatCommitTime,
   isUncommittedCommit,
 } from "../lib/commitGraphLayout";
+import { isTagRef, TagBadge, tagDisplayName } from "./TagBadge";
 import {
   clampCommitInfoHeight,
   clampFilesListWidth,
@@ -430,7 +432,7 @@ export function CommitFilesPane({
       } catch (e) {
         if (!cancelled) {
           setDiff("");
-          setDiffError(e instanceof Error ? e.message : String(e));
+          setDiffError(formatError(e));
           setDiffLoading(false);
         }
       }
@@ -454,7 +456,7 @@ export function CommitFilesPane({
           onCommitted?.();
         }
       } catch (e) {
-        setActionError(e instanceof Error ? e.message : String(e));
+        setActionError(formatError(e));
       } finally {
         setBusy(false);
       }
@@ -592,7 +594,7 @@ export function CommitFilesPane({
         await api.openRepositoryFile(repositoryId, file.path);
       }
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
+      setActionError(formatError(e));
     }
   }
 
@@ -601,7 +603,7 @@ export function CommitFilesPane({
       setActionError(null);
       await api.revealRepositoryFile(repositoryId, file.path);
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
+      setActionError(formatError(e));
     }
   }
 
@@ -614,7 +616,7 @@ export function CommitFilesPane({
       }
       await navigator.clipboard.writeText(paths.join("\n"));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
+      setActionError(formatError(e));
     }
   }
 
@@ -1624,23 +1626,25 @@ function CommitInfoPanel({
       </dl>
       {commit.refs.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-0.5">
-          {commit.refs.map((ref) => (
-            <span
-              key={ref}
-              className={[
-                "rounded px-1 py-px text-[10px] font-medium",
-                ref === "HEAD"
-                  ? "bg-accent/25 text-accent"
-                  : ref.startsWith("tag:")
-                    ? "bg-warning/20 text-warning"
+          {commit.refs.map((ref) =>
+            isTagRef(ref) ? (
+              <TagBadge key={ref} name={tagDisplayName(ref)} className="text-[10px]" />
+            ) : (
+              <span
+                key={ref}
+                className={[
+                  "rounded px-1 py-px text-[10px] font-medium",
+                  ref === "HEAD"
+                    ? "bg-accent/25 text-accent"
                     : ref.includes("/")
                       ? "bg-surface-overlay text-ink-muted"
                       : "bg-success/20 text-success",
-              ].join(" ")}
-            >
-              {ref}
-            </span>
-          ))}
+                ].join(" ")}
+              >
+                {ref}
+              </span>
+            ),
+          )}
         </div>
       )}
     </div>

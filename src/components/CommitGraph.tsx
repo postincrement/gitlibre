@@ -22,6 +22,7 @@ import {
   laneColor,
   layoutCommitGraph,
 } from "../lib/commitGraphLayout";
+import { isTagRef, TagBadge, tagDisplayName } from "./TagBadge";
 
 const ROW_H = 22;
 const LANE_W = 14;
@@ -628,7 +629,7 @@ function RefChips({
     <span className="flex shrink-0 flex-wrap items-center gap-1">
       {refs.map((ref) => {
         const isHead = ref === "HEAD";
-        const isTag = ref.startsWith("tag:");
+        const isTag = isTagRef(ref);
         const isRemote = ref.includes("/");
         const isBranch = !isHead && !isTag;
         // Ahead/behind only on local branch names, not origin/* chips.
@@ -639,26 +640,26 @@ function RefChips({
 
         return (
           <span key={ref} className="inline-flex items-center gap-1">
-            <span
-              className={[
-                "inline-flex items-center rounded px-1 py-px font-medium leading-tight",
-                isHead
-                  ? "bg-accent/25 text-accent"
-                  : isTag
-                    ? "bg-warning/20 text-warning"
-                    : "",
-              ].join(" ")}
-              style={
-                isBranch
-                  ? {
-                      backgroundColor: "var(--status-branch)",
-                      color: "var(--status-branch-fg)",
-                    }
-                  : undefined
-              }
-            >
-              {ref}
-            </span>
+            {isTag ? (
+              <TagBadge name={tagDisplayName(ref)} />
+            ) : (
+              <span
+                className={[
+                  "inline-flex items-center rounded px-1 py-px font-medium leading-tight",
+                  isHead ? "bg-accent/25 text-accent" : "",
+                ].join(" ")}
+                style={
+                  isBranch
+                    ? {
+                        backgroundColor: "var(--status-branch)",
+                        color: "var(--status-branch-fg)",
+                      }
+                    : undefined
+                }
+              >
+                {ref}
+              </span>
+            )}
             {ahead > 0 && (
               <span
                 className="inline-flex items-center rounded-[3px] px-1 text-[9px] font-bold leading-none"

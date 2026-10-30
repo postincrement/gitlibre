@@ -5,7 +5,8 @@ export type StatusColorKey =
   | "deleted"
   | "repoChanges"
   | "branch"
-  | "branchDivergence";
+  | "branchDivergence"
+  | "tag";
 
 export interface StatusColors {
   modified: string;
@@ -18,6 +19,8 @@ export interface StatusColors {
   branch: string;
   /** Ahead/behind-of-remote count badges. */
   branchDivergence: string;
+  /** Tag chips on commits in history. */
+  tag: string;
 }
 
 export const DEFAULT_STATUS_COLORS: StatusColors = {
@@ -34,6 +37,8 @@ export const DEFAULT_STATUS_COLORS: StatusColors = {
   branch: "#d5e7ff",
   /** Ahead/behind-of-remote count. */
   branchDivergence: "#003a79",
+  /** Tag chips on commits in history. */
+  tag: "#ffded5",
 };
 
 const STORAGE_KEY = "gitlibre.statusColors";
@@ -75,6 +80,11 @@ export function loadStatusColors(): StatusColors {
           (parsed as { branchBehind?: string }).branchBehind ??
           "",
         DEFAULT_STATUS_COLORS.branchDivergence,
+      ),
+      tag: normalizeHex(
+        // The first shipped default was gold; treat that as unset.
+        parsed.tag === "#f5c451" ? "" : (parsed.tag ?? ""),
+        DEFAULT_STATUS_COLORS.tag,
       ),
     };
   } catch {
@@ -124,6 +134,8 @@ export function applyStatusColors(colors: StatusColors): void {
     "--status-branch-divergence-fg",
     contrastingInk(colors.branchDivergence),
   );
+  root.style.setProperty("--status-tag", colors.tag);
+  root.style.setProperty("--status-tag-fg", contrastingInk(colors.tag));
 }
 
 export function resetStatusColors(): StatusColors {

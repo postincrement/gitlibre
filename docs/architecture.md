@@ -3,7 +3,7 @@
 ## Goals
 
 - Keep Git and workspace logic independent of the UI framework.
-- Prefer the system `git` executable over embedding libgit2.
+- Talk to repositories through vendored libgit2 (`git2`), not a host `git` or `ssh` binary.
 - Stay responsive during long-running fetch operations.
 - Persist workspaces without writing into repository working trees.
 
@@ -18,10 +18,11 @@ Framework-agnostic library:
 | `models` / `ids` | Workspace, repository, account types; UUID newtypes |
 | `store` | In-memory config + atomic JSON persistence + migrations |
 | `secrets` | `SecretStore` trait; OS keychain + in-memory test store |
-| `auth` | Per-invocation `GitAuth` (HTTPS bearer / SSH key env) |
+| `auth` | Per-invocation `GitAuth` (HTTPS bearer / OpenSSH private key path) |
 | `detect` / `ssh_config` | Remote URL + SSH config + local identity hints |
-| `git::executor` | Spawn `git` with argv arrays, cwd, optional auth env |
-| `git::status` | Porcelain v2 `-z` parsing, remotes, branch inspection |
+| `git::session` | Open a repo and run libgit2 on `spawn_blocking` |
+| `git::transport` | Fetch, pull, and push through libgit2 + libssh2 |
+| `git::status` | Status, remotes, and branch inspection |
 | `git::branches` | Local/remote branches + ahead/behind |
 | `git::log` | Topo-ordered commit history with decorations |
 | `git::show` | Commit / working-tree file lists and unified diffs |
@@ -75,46 +76,39 @@ Paths are canonicalized when adding. Duplicate membership within a workspace is 
 
 1. Acquires a per-canonical-path mutex (prevents concurrent Git ops on the same repo).
 2. Acquires a semaphore permit (default concurrency 4).
-3. Runs `git fetch --all --progress` with `GIT_TERMINAL_PROMPT=0`.
+3. Runs `git2` fetch of every remote inside `spawn_blocking` and streams progress strings.
 4. Reports progress via callback; workspace fetch fans out independently.
 
 ## Staging and commit
 
-Working-tree listings parse porcelain v1 into separate **staged**, **unstaged**,
-and **untracked** entries (a path can appear twice when both index and worktree
-differ). Diffs use `git diff --cached`, `git diff`, or `git diff --no-index`
-accordingly.
+Working-tree listings come from libgit2 status and diffs, split into **staged**,
+**unstaged**, and **untracked** entries (a path can appear twice when both index
+and worktree differ). Diffs are unified patches from `git2`.
 
-Mutations:
-
-| Action | Git |
-|--------|-----|
-| Stage | `git add -- <paths>` |
-| Unstage | `git restore --staged -- <paths>` |
-| Discard staged | `git restore --source=HEAD --staged --worktree -- <paths>` |
-| Discard unstaged | `git restore --worktree -- <paths>` |
-| Discard untracked | `git clean -f -d -- <paths>` |
-| Commit | `git commit [-c user.*] [-m \| --no-edit] [--amend]` |
-
-When the repository has an assigned account with `commitName` / `commitEmail`,
-those values are passed as one-shot `-c user.name` / `-c user.email` (no global
-config rewrite). Otherwise system Git identity applies.
+Mutations update the index and worktree in process: stage, unstage, discard,
+remove, and commit (including amend). Account commit name and email are applied
+only to that commit's signature. GitLibre does not write `user.name` or
+`user.email` into Git config. When no account identity is set, the repository's
+existing config identity is used. Commit signing is not available yet. With
+verification left on, GitLibre still runs the repo's `pre-commit` and
+`commit-msg` hook scripts.
 
 ## Platform notes
 
 - macOS production packaging builds a `.app`. DMG creation uses Finder AppleScript and can time out in headless CI; keep `bundle.targets` as `["app"]` until DMG automation is needed.
-- Git discovery uses `PATH` plus common Homebrew/`/usr/bin` locations.
-- Auth hangs are avoided with `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS`.
+- Startup does not search `PATH` for `git`, `ssh`, `plink`, or TortoisePlink.
+- HTTPS trust uses OpenSSL's CA bundle. Enterprise roots that exist only in the Windows certificate store are not picked up.
 
 ## Multi-account auth (M2)
 
 - Account metadata lives in `config.json` (`accounts[]`); tokens never do.
 - Tokens are stored in the OS keychain under service `com.gitlibre.desktop`, key = account UUID.
 - Each repository may reference an `account_id`.
-- On fetch, GitLibre resolves the account and applies **per-process** env:
-  - HTTPS: `GIT_CONFIG_*` `http.extraHeader=AUTHORIZATION: bearer …` and empty `credential.helper` for that invocation only.
-  - SSH: `GIT_SSH_COMMAND=ssh -i … -o IdentitiesOnly=yes -o BatchMode=yes`.
-- Unassigned repos continue to use the user’s normal system Git credentials.
+- On fetch, pull, and push, GitLibre resolves the account and supplies credentials inside libgit2's callback. Nothing is written back to `.git/config`, and `GIT_SSH` / `GIT_SSH_COMMAND` are never set.
+  - HTTPS: username plus bearer token as user/password. A public remote with no account is attempted anonymously; a server 401/403 becomes `AuthenticationFailed`.
+  - SSH: the account's OpenSSH private key, loaded with libssh2. Host aliases are rewritten from `~/.ssh/config` (`HostName`, `User`, `IdentityFile`) before connect; the rewritten URL is not saved. Passphrase-protected keys are unsupported. An SSH remote with no assigned key fails before connect and asks for an account.
+- The credential callback is the seam for later in-process sources: PuTTY `.ppk` keys, PuTTY sessions, Pageant, and the OpenSSH agent. Those are not part of this port, and they will not be implemented by launching an external SSH or Git program.
+- `ProxyJump`, `ProxyCommand`, `Match`, and `Include` are not applied.
 
 ### Account detection from existing repos
 
@@ -141,4 +135,5 @@ On **add repository** and when **opening an unassigned repo**, GitLibre runs det
 
 - OAuth device flow instead of PAT paste.
 - Provider REST adapters for account validation.
-- Checkout, pull/push, merge/rebase tooling as additional core modules.
+- In-process PuTTY `.ppk` keys, PuTTY sessions, Pageant, and the OpenSSH agent, all feeding the same credential callback.
+- Merge and rebase tooling.
