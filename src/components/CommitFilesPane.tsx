@@ -16,6 +16,11 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import {
+  clearCommitDraft,
+  loadCommitDraft,
+  updateCommitDraft,
+} from "../lib/commitDraft";
 import { formatError } from "../lib/formatError";
 import {
   formatCommitTime,
@@ -119,11 +124,6 @@ interface CommitFilesPaneProps {
   onCommitted?: () => void;
   /** Select another commit (e.g. parent hash link). */
   onSelectCommitId?: (commitId: string) => void;
-  /**
-   * When true, hide the commit message / amend form for uncommitted changes
-   * (History mode). Commit info for real commits is unaffected.
-   */
-  hideCommitComposer?: boolean;
   /** e.g. `origin/main` for the push-immediately checkbox label. */
   pushTargetLabel?: string | null;
 }
@@ -138,7 +138,6 @@ export function CommitFilesPane({
   onWorkingTreeChanged,
   onCommitted,
   onSelectCommitId,
-  hideCommitComposer = false,
   pushTargetLabel = null,
 }: CommitFilesPaneProps) {
   /** All selected file rows (multi-select). */
@@ -154,8 +153,15 @@ export function CommitFilesPane({
   } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [amend, setAmend] = useState(false);
+  const [message, setMessage] = useState(
+    () => loadCommitDraft(repositoryId).message,
+  );
+  const [amend, setAmend] = useState(() => loadCommitDraft(repositoryId).amend);
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(() =>
+    loadCommitInfoHeight(workspaceId),
+  );
+  const paneRef = useRef<HTMLDivElement>(null);
   const [pushImmediately, setPushImmediately] = useState(() =>
     loadPushImmediately(),
   );
@@ -194,7 +200,6 @@ export function CommitFilesPane({
   const sawFilesLoadingRef = useRef(false);
 
   const uncommitted = commit ? isUncommittedCommit(commit) : false;
-  const showBottomMeta = !uncommitted || !hideCommitComposer;
   const [separateUntracked, setSeparateUntracked] = useState(() =>
     loadSeparateUntrackedList(),
   );
@@ -270,10 +275,6 @@ export function CommitFilesPane({
     setActionError(null);
     setFileMenu(null);
     setPendingFileAction(null);
-    if (!commit || !isUncommittedCommit(commit)) {
-      setMessage("");
-      setAmend(false);
-    }
     // Only Uncommitted changes restores a persisted file; real commits always
     // start on the first file.
     pendingFileRestoreRef.current = commit
@@ -283,6 +284,25 @@ export function CommitFilesPane({
       : null;
     sawFilesLoadingRef.current = false;
   }, [commit?.id, repositoryId]);
+
+  useEffect(() => {
+    const draft = loadCommitDraft(repositoryId);
+    setMessage(draft.message);
+    setAmend(draft.amend);
+    setComposerExpanded(false);
+  }, [repositoryId]);
+
+  useEffect(() => {
+    if (!uncommitted) setComposerExpanded(false);
+  }, [uncommitted]);
+
+  useEffect(() => {
+    if (!composerExpanded) return;
+    const pane = paneRef.current;
+    if (!pane) return;
+    const room = pane.clientHeight - 120;
+    setComposerHeight(Math.min(infoHeight, Math.max(96, room)));
+  }, [composerExpanded, infoHeight]);
 
   useEffect(() => {
     if (!commit) return;
@@ -453,6 +473,8 @@ export function CommitFilesPane({
         if (opts?.committed) {
           setMessage("");
           setAmend(false);
+          clearCommitDraft(repositoryId);
+          setComposerExpanded(false);
           onCommitted?.();
         }
       } catch (e) {
@@ -461,7 +483,7 @@ export function CommitFilesPane({
         setBusy(false);
       }
     },
-    [onWorkingTreeChanged, onCommitted],
+    [onWorkingTreeChanged, onCommitted, repositoryId],
   );
 
   const onFilesWidthDrag = useCallback((deltaX: number) => {
@@ -491,12 +513,22 @@ export function CommitFilesPane({
     persistStagedFilesPaneHeight(workspaceId, stagedPaneHeightRef.current);
   }, [workspaceId]);
 
-  async function handleAmendChange(next: boolean) {
+  function writeMessage(next: string) {
+    setMessage(next);
+    updateCommitDraft(repositoryId, { message: next });
+  }
+
+  function writeAmend(next: boolean) {
     setAmend(next);
+    updateCommitDraft(repositoryId, { amend: next });
+  }
+
+  async function handleAmendChange(next: boolean) {
+    writeAmend(next);
     if (next && !message.trim()) {
       try {
         const prior = await api.readHeadCommitMessage(repositoryId);
-        if (prior.trim()) setMessage(prior);
+        if (prior.trim()) writeMessage(prior);
       } catch {
         /* leave message as-is */
       }
@@ -669,11 +701,14 @@ export function CommitFilesPane({
     );
   }
 
-  const showCommitComposer = uncommitted && showBottomMeta;
-  const showCommitInfo = !uncommitted && showBottomMeta;
+  const showCommitComposer = uncommitted;
+  const showCommitInfo = !uncommitted;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-raised/40">
+    <div
+      ref={paneRef}
+      className="flex h-full min-h-0 flex-col bg-surface-raised/40"
+    >
       <div className="flex min-h-0 min-w-0 flex-1">
       <div
         className="flex min-h-0 shrink-0 flex-col border-r border-border"
@@ -894,17 +929,20 @@ export function CommitFilesPane({
 
       {showCommitComposer && (
         <>
-          <VerticalSplitHandle
-            onDrag={onInfoHeightDrag}
-            onDragEnd={onInfoHeightDragEnd}
-          />
+          {composerExpanded && (
+            <VerticalSplitHandle
+              onDrag={onInfoHeightDrag}
+              onDragEnd={onInfoHeightDragEnd}
+            />
+          )}
           <div
             className="shrink-0 overflow-auto border-t border-border bg-surface/40"
-            style={{ height: infoHeight }}
+            style={composerExpanded ? { height: composerHeight } : undefined}
           >
             <CommitForm
               message={message}
               amend={amend}
+              expanded={composerExpanded}
               pushImmediately={pushImmediately}
               pushTargetLabel={pushTargetLabel}
               signOff={signOff}
@@ -914,7 +952,8 @@ export function CommitFilesPane({
               canCommit={staged.length > 0 || amend}
               stagedCount={staged.length}
               actionError={actionError}
-              onMessageChange={setMessage}
+              onMessageChange={writeMessage}
+              onExpandedChange={setComposerExpanded}
               onAmendChange={(v) => void handleAmendChange(v)}
               onPushImmediatelyChange={(v) => {
                 setPushImmediately(v);
@@ -1387,6 +1426,7 @@ function MenuItem({
 function CommitForm({
   message,
   amend,
+  expanded,
   pushImmediately,
   pushTargetLabel,
   signOff,
@@ -1397,6 +1437,7 @@ function CommitForm({
   stagedCount,
   actionError,
   onMessageChange,
+  onExpandedChange,
   onAmendChange,
   onPushImmediatelyChange,
   onSignOffChange,
@@ -1406,6 +1447,7 @@ function CommitForm({
 }: {
   message: string;
   amend: boolean;
+  expanded: boolean;
   pushImmediately: boolean;
   pushTargetLabel: string | null;
   signOff: boolean;
@@ -1416,6 +1458,7 @@ function CommitForm({
   stagedCount: number;
   actionError: string | null;
   onMessageChange: (v: string) => void;
+  onExpandedChange: (expanded: boolean) => void;
   onAmendChange: (v: boolean) => void;
   onPushImmediatelyChange: (v: boolean) => void;
   onSignOffChange: (v: boolean) => void;
@@ -1425,6 +1468,7 @@ function CommitForm({
 }) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -1450,24 +1494,60 @@ function CommitForm({
     noVerify ? "No hooks" : null,
   ].filter(Boolean);
 
+  const commitDisabled =
+    busy || !canCommit || (!amend && !message.trim()) || (!amend && stagedCount === 0);
+
   return (
     <form
+      ref={formRef}
       onSubmit={onSubmit}
-      className="flex h-full min-h-0 flex-col gap-2 px-3 py-2 text-[12px] sm:flex-row sm:gap-4"
+      onMouseDown={(e) => {
+        const target = e.target as HTMLElement;
+        if (target.closest("textarea")) return;
+        // Keep the caret in the message field while using the commit controls.
+        if (formRef.current?.contains(target)) e.preventDefault();
+      }}
+      className={
+        expanded
+          ? "flex h-full min-h-0 flex-col gap-2 px-3 py-2 text-[12px] sm:flex-row sm:gap-4"
+          : "flex flex-wrap items-center gap-2 px-3 py-1.5 text-[12px]"
+      }
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
-        <div className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-          Commit message
-        </div>
+      <div
+        className={
+          expanded
+            ? "flex min-h-0 min-w-0 flex-1 flex-col gap-1.5"
+            : "min-w-0 flex-1"
+        }
+      >
+        {expanded && (
+          <div className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+            Commit message
+          </div>
+        )}
         <textarea
-          className="field-input min-h-[72px] flex-1 resize-none font-sans text-[12px]"
+          className={
+            expanded
+              ? "field-input min-h-0 flex-1 resize-none font-sans text-[12px]"
+              : "field-input commit-message-compact w-full font-sans text-[12px]"
+          }
+          rows={expanded ? undefined : 1}
           placeholder="Commit message"
           value={message}
           onChange={(e) => onMessageChange(e.target.value)}
+          onFocus={() => onExpandedChange(true)}
+          onBlur={(e) => {
+            const next = e.relatedTarget as Node | null;
+            if (next && formRef.current?.contains(next)) return;
+            onExpandedChange(false);
+          }}
           disabled={busy}
         />
-        {actionError && <p className="shrink-0 text-[11px] text-danger">{actionError}</p>}
+        {expanded && actionError && (
+          <p className="shrink-0 text-[11px] text-danger">{actionError}</p>
+        )}
       </div>
+      {expanded ? (
       <div className="flex w-full shrink-0 flex-col justify-between gap-2 sm:w-64">
         <div className="space-y-1.5">
           <label className="flex items-start gap-2 text-[11px] text-ink">
@@ -1549,17 +1629,29 @@ function CommitForm({
           <button
             type="submit"
             className="btn-primary"
-            disabled={
-              busy ||
-              !canCommit ||
-              (!amend && !message.trim()) ||
-              (!amend && stagedCount === 0)
-            }
+            disabled={commitDisabled}
           >
             {busy ? "Working…" : amend ? "Amend" : "Commit"}
           </button>
         </div>
       </div>
+      ) : (
+        <>
+          <span className="shrink-0 text-[11px] text-ink-muted">
+            {stagedCount} staged
+          </span>
+          <button
+            type="submit"
+            className="btn-primary shrink-0 px-3 py-1 text-[12px]"
+            disabled={commitDisabled}
+          >
+            {busy ? "Working…" : amend ? "Amend" : "Commit"}
+          </button>
+        </>
+      )}
+      {!expanded && actionError && (
+        <p className="basis-full text-[11px] text-danger">{actionError}</p>
+      )}
     </form>
   );
 }

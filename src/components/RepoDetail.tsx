@@ -574,7 +574,7 @@ export function RepoDetail({
             files={files}
             loading={filesLoading}
             error={filesError}
-            hideCommitComposer
+            pushTargetLabel={pushTargetLabel(status)}
             onWorkingTreeChanged={() => void refreshWorkingTree()}
             onCommitted={() => void refreshAfterCommit()}
             onSelectCommitId={selectCommitById}

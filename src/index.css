@@ -217,6 +217,17 @@ html.dark .repo-toolbar-btn:not(:disabled):hover .repo-toolbar-glyph {
   border-color: var(--color-accent);
 }
 
+.field-input.commit-message-compact {
+  box-sizing: border-box;
+  height: calc(1.25rem + 0.5rem + 2px);
+  max-height: calc(1.25rem + 0.5rem + 2px);
+  min-height: 0;
+  padding: 0.25rem 0.625rem;
+  line-height: 1.25rem;
+  overflow: hidden;
+  resize: none;
+}
+
 /* Startup splash — full-window welcome */
 .splash {
   background:
