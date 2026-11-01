@@ -3,6 +3,7 @@ export type StatusColorKey =
   | "added"
   | "new"
   | "deleted"
+  | "replaced"
   | "repoChanges";
 
 export interface StatusColors {
@@ -10,6 +11,8 @@ export interface StatusColors {
   added: string;
   new: string;
   deleted: string;
+  /** Renamed / copied (replace) files. */
+  replaced: string;
   /** Badge on dirty repositories in the sidebar. */
   repoChanges: string;
 }
@@ -22,6 +25,8 @@ export const DEFAULT_STATUS_COLORS: StatusColors = {
   new: "#654982",
   /** Deleted files. */
   deleted: "#999999",
+  /** Renamed / copied files (matches prior accent until a final default is chosen). */
+  replaced: "#3d8bfd",
   /** Changed-file count badge on repository rows. */
   repoChanges: "#3472b0",
 };
@@ -53,6 +58,10 @@ export function loadStatusColors(): StatusColors {
         parsed.deleted ?? "",
         DEFAULT_STATUS_COLORS.deleted,
       ),
+      replaced: normalizeHex(
+        parsed.replaced ?? "",
+        DEFAULT_STATUS_COLORS.replaced,
+      ),
       repoChanges: normalizeHex(
         parsed.repoChanges ?? "",
         DEFAULT_STATUS_COLORS.repoChanges,
@@ -79,6 +88,7 @@ export function applyStatusColors(colors: StatusColors): void {
   root.style.setProperty("--status-added", colors.added);
   root.style.setProperty("--status-new", colors.new);
   root.style.setProperty("--status-deleted", colors.deleted);
+  root.style.setProperty("--status-replaced", colors.replaced);
   root.style.setProperty("--status-repo-changes", colors.repoChanges);
 }
 

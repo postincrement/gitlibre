@@ -58,6 +58,7 @@ html {
   --status-added: #14892c;
   --status-new: #654982;
   --status-deleted: #999999;
+  --status-replaced: #3d8bfd;
   --status-repo-changes: #3472b0;
 }
 

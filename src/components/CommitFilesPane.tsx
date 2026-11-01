@@ -1613,7 +1613,8 @@ function StatusBadge({ status }: { status: string }) {
     className = onColor;
     style = { backgroundColor: "var(--status-deleted)" };
   } else if (kind === "R" || kind === "C") {
-    className = "bg-accent text-white";
+    className = onColor;
+    style = { backgroundColor: "var(--status-replaced)" };
   } else {
     className = onColor;
     style = { backgroundColor: "var(--status-modified)" };
