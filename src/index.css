@@ -53,6 +53,8 @@ html.light {
 
 html {
   color-scheme: dark;
+  /* UI zoom factor (View → Zoom In / Out). Applied via style.zoom as well. */
+  --ui-zoom: 1;
   /* File-list status badge colours (overridden by Settings → Colours). */
   --status-modified: #f6c342;
   --status-added: #14892c;
@@ -60,6 +62,10 @@ html {
   --status-deleted: #999999;
   --status-replaced: #3d8bfd;
   --status-repo-changes: #3472b0;
+  --status-branch: #d5e7ff;
+  --status-branch-fg: #1a1200;
+  --status-branch-divergence: #003a79;
+  --status-branch-divergence-fg: #ffffff;
 }
 
 html.light {

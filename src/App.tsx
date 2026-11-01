@@ -18,6 +18,9 @@ import {
   onMenuNewWorkspace,
   onMenuOpenWorkspace,
   onMenuSettings,
+  onMenuZoomIn,
+  onMenuZoomOut,
+  onMenuZoomReset,
   onRepoFetchFinished,
   onRepoFetchProgress,
   onWorkspaceFetchFinished,
@@ -35,6 +38,7 @@ import {
   restoreWorkspaceWindowGeometry,
   saveWorkspaceWindowGeometry,
 } from "./lib/workspaceWindowState";
+import { resetUiZoom, zoomIn, zoomOut } from "./lib/uiZoom";
 import type {
   AccountId,
   AppSnapshot,
@@ -369,6 +373,24 @@ export default function App() {
           setShowSettings(true);
         }),
       );
+      unlisteners.push(
+        await onMenuZoomIn(() => {
+          if (cancelled) return;
+          zoomIn();
+        }),
+      );
+      unlisteners.push(
+        await onMenuZoomOut(() => {
+          if (cancelled) return;
+          zoomOut();
+        }),
+      );
+      unlisteners.push(
+        await onMenuZoomReset(() => {
+          if (cancelled) return;
+          resetUiZoom();
+        }),
+      );
     }
 
     void bind();
@@ -618,6 +640,7 @@ export default function App() {
         canFetchRepo={Boolean(selected?.available)}
         repoFetching={Boolean(selected?.isFetching)}
         busy={busy}
+        onCommit={() => handleContentViewChange("fileStatus")}
         onPullRepo={handlePullOne}
         onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}

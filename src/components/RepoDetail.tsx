@@ -456,6 +456,7 @@ export function RepoDetail({
           files={statusFiles}
           loading={statusFilesLoading}
           error={statusFilesError}
+          pushTargetLabel={pushTargetLabel(status)}
           onWorkingTreeChanged={() => void refreshWorkingTree()}
           onCommitted={() => void refreshAfterCommit()}
         />
@@ -512,4 +513,11 @@ export function RepoDetail({
       </div>
     </main>
   );
+}
+
+/** Label for SourceTree-style "Push changes immediately to …". */
+function pushTargetLabel(status: RepoStatus): string | null {
+  if (status.detachedHead || !status.currentBranch) return null;
+  const remote = status.remotes[0]?.name ?? "origin";
+  return `${remote}/${status.currentBranch}`;
 }

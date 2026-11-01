@@ -4,7 +4,9 @@ export type StatusColorKey =
   | "new"
   | "deleted"
   | "replaced"
-  | "repoChanges";
+  | "repoChanges"
+  | "branch"
+  | "branchDivergence";
 
 export interface StatusColors {
   modified: string;
@@ -15,6 +17,10 @@ export interface StatusColors {
   replaced: string;
   /** Badge on dirty repositories in the sidebar. */
   repoChanges: string;
+  /** Local branch name chips in the commit graph. */
+  branch: string;
+  /** Ahead/behind-of-remote count badges. */
+  branchDivergence: string;
 }
 
 export const DEFAULT_STATUS_COLORS: StatusColors = {
@@ -29,6 +35,10 @@ export const DEFAULT_STATUS_COLORS: StatusColors = {
   replaced: "#3d8bfd",
   /** Changed-file count badge on repository rows. */
   repoChanges: "#3472b0",
+  /** Local branch chips. */
+  branch: "#d5e7ff",
+  /** Ahead/behind-of-remote count. */
+  branchDivergence: "#003a79",
 };
 
 const STORAGE_KEY = "gitlibre.statusColors";
@@ -66,6 +76,15 @@ export function loadStatusColors(): StatusColors {
         parsed.repoChanges ?? "",
         DEFAULT_STATUS_COLORS.repoChanges,
       ),
+      branch: normalizeHex(parsed.branch ?? "", DEFAULT_STATUS_COLORS.branch),
+      branchDivergence: normalizeHex(
+        // Prefer the unified key; migrate older ahead/behind prefs if present.
+        parsed.branchDivergence ??
+          (parsed as { branchAhead?: string }).branchAhead ??
+          (parsed as { branchBehind?: string }).branchBehind ??
+          "",
+        DEFAULT_STATUS_COLORS.branchDivergence,
+      ),
     };
   } catch {
     return { ...DEFAULT_STATUS_COLORS };
@@ -80,6 +99,21 @@ export function saveStatusColors(colors: StatusColors): void {
   }
 }
 
+/**
+ * Pick black or white ink for readable text on `hex` (WCAG relative luminance).
+ */
+export function contrastingInk(hex: string): "#ffffff" | "#1a1200" {
+  const normalized = normalizeHex(hex, "#000000");
+  const r = Number.parseInt(normalized.slice(1, 3), 16) / 255;
+  const g = Number.parseInt(normalized.slice(3, 5), 16) / 255;
+  const b = Number.parseInt(normalized.slice(5, 7), 16) / 255;
+  const toLinear = (c: number) =>
+    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const luminance =
+    0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+  return luminance > 0.55 ? "#1a1200" : "#ffffff";
+}
+
 /** Write CSS variables used by file-list status badges. */
 export function applyStatusColors(colors: StatusColors): void {
   saveStatusColors(colors);
@@ -90,6 +124,16 @@ export function applyStatusColors(colors: StatusColors): void {
   root.style.setProperty("--status-deleted", colors.deleted);
   root.style.setProperty("--status-replaced", colors.replaced);
   root.style.setProperty("--status-repo-changes", colors.repoChanges);
+  root.style.setProperty("--status-branch", colors.branch);
+  root.style.setProperty(
+    "--status-branch-fg",
+    contrastingInk(colors.branch),
+  );
+  root.style.setProperty("--status-branch-divergence", colors.branchDivergence);
+  root.style.setProperty(
+    "--status-branch-divergence-fg",
+    contrastingInk(colors.branchDivergence),
+  );
 }
 
 export function resetStatusColors(): StatusColors {

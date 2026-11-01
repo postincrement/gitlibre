@@ -269,16 +269,38 @@ export async function revealRepositoryFile(
   return invoke<void>("reveal_repository_file", { id, path });
 }
 
+export interface CommitOptions {
+  amend?: boolean;
+  signOff?: boolean;
+  signCommit?: boolean;
+  noVerify?: boolean;
+}
+
 export async function commitRepository(
   id: RepositoryId,
   message: string,
-  amend?: boolean,
+  options?: CommitOptions,
 ): Promise<string> {
+  const opts = {
+    amend: options?.amend ?? false,
+    signOff: options?.signOff ?? false,
+    signCommit: options?.signCommit ?? false,
+    noVerify: options?.noVerify ?? false,
+  };
   return invoke<string>("commit_repository", {
     id,
     message,
-    amend: amend ?? false,
+    amend: opts.amend,
+    options: opts,
   });
+}
+
+export async function readHeadCommitMessage(id: RepositoryId): Promise<string> {
+  return invoke<string>("read_head_commit_message", { id });
+}
+
+export async function pushRepository(id: RepositoryId): Promise<string> {
+  return invoke<string>("push_repository", { id });
 }
 
 export async function listWorkspaceStatuses(

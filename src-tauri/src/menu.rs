@@ -99,6 +99,35 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
+    let zoom_in = MenuItem::with_id(
+        app,
+        "zoom-in",
+        "Zoom In",
+        true,
+        Some("CmdOrCtrl+Plus"),
+    )?;
+    let zoom_out = MenuItem::with_id(
+        app,
+        "zoom-out",
+        "Zoom Out",
+        true,
+        Some("CmdOrCtrl+-"),
+    )?;
+    let zoom_reset = MenuItem::with_id(
+        app,
+        "zoom-reset",
+        "Actual Size",
+        true,
+        Some("CmdOrCtrl+0"),
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&zoom_in, &zoom_out, &zoom_reset],
+    )?;
+
     let window_menu = Submenu::with_items(
         app,
         "Window",
@@ -113,12 +142,15 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
     #[cfg(target_os = "macos")]
     {
-        Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+        Menu::with_items(
+            app,
+            &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu],
+        )
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window_menu;
-        Menu::with_items(app, &[&file_menu, &edit_menu])
+        Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu])
     }
 }
 
@@ -128,6 +160,9 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         "open-workspace" => emit_to_focused(app, "menu-open-workspace"),
         "accounts" => emit_to_focused(app, "menu-accounts"),
         "settings" => emit_to_focused(app, "menu-settings"),
+        "zoom-in" => emit_to_focused(app, "menu-zoom-in"),
+        "zoom-out" => emit_to_focused(app, "menu-zoom-out"),
+        "zoom-reset" => emit_to_focused(app, "menu-zoom-reset"),
         _ => {}
     }
 }

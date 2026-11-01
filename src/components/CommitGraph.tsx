@@ -139,12 +139,15 @@ export function CommitGraph({
     [workspaceId],
   );
 
-  /** Ribbons cover each connected run of a lane — tip through last node, not past it into empty page. */
-  const behindByBranch = useMemo(() => {
-    const map = new Map<string, number>();
+  /** Ahead/behind counts keyed by local branch name (vs upstream). */
+  const divergenceByBranch = useMemo(() => {
+    const map = new Map<string, { ahead: number; behind: number }>();
     for (const branch of branches) {
-      if (branch.behind != null && branch.behind > 0) {
-        map.set(branch.name, branch.behind);
+      const ahead = branch.ahead != null && branch.ahead > 0 ? branch.ahead : 0;
+      const behind =
+        branch.behind != null && branch.behind > 0 ? branch.behind : 0;
+      if (ahead > 0 || behind > 0) {
+        map.set(branch.name, { ahead, behind });
       }
     }
     return map;
@@ -350,7 +353,10 @@ export function CommitGraph({
               >
                 <div aria-hidden />
                 <div className="flex min-w-0 items-center gap-1.5 overflow-hidden px-2">
-                  <RefChips refs={row.commit.refs} behindByBranch={behindByBranch} />
+                  <RefChips
+                    refs={row.commit.refs}
+                    divergenceByBranch={divergenceByBranch}
+                  />
                   <span
                     className={[
                       "min-w-0 truncate text-ink",
@@ -468,38 +474,71 @@ function ColumnResizeHandle({
 
 function RefChips({
   refs,
-  behindByBranch,
+  divergenceByBranch,
 }: {
   refs: string[];
-  behindByBranch: Map<string, number>;
+  divergenceByBranch: Map<string, { ahead: number; behind: number }>;
 }) {
   if (refs.length === 0) return null;
   return (
-    <span className="flex shrink-0 items-center gap-1">
+    <span className="flex shrink-0 flex-wrap items-center gap-1">
       {refs.map((ref) => {
         const isHead = ref === "HEAD";
         const isTag = ref.startsWith("tag:");
         const isRemote = ref.includes("/");
-        const behind =
-          !isHead && !isTag ? behindByBranch.get(ref) : undefined;
+        const isBranch = !isHead && !isTag;
+        // Ahead/behind only on local branch names, not origin/* chips.
+        const divergence =
+          isBranch && !isRemote ? divergenceByBranch.get(ref) : undefined;
+        const ahead = divergence?.ahead ?? 0;
+        const behind = divergence?.behind ?? 0;
+
         return (
-          <span
-            key={ref}
-            className={[
-              "inline-flex items-center gap-1 rounded px-1 py-px font-medium leading-tight",
-              isHead
-                ? "bg-accent/25 text-accent"
-                : isTag
-                  ? "bg-warning/20 text-warning"
-                  : isRemote
-                    ? "bg-surface-overlay text-ink-muted"
-                    : "bg-success/20 text-success",
-            ].join(" ")}
-          >
-            <span>{ref}</span>
-            {behind != null && (
-              <span className="font-normal text-warning">
-                {behind} behind
+          <span key={ref} className="inline-flex items-center gap-1">
+            <span
+              className={[
+                "inline-flex items-center rounded px-1 py-px font-medium leading-tight",
+                isHead
+                  ? "bg-accent/25 text-accent"
+                  : isTag
+                    ? "bg-warning/20 text-warning"
+                    : "",
+              ].join(" ")}
+              style={
+                isBranch
+                  ? {
+                      backgroundColor: "var(--status-branch)",
+                      color: "var(--status-branch-fg)",
+                    }
+                  : undefined
+              }
+            >
+              {ref}
+            </span>
+            {ahead > 0 && (
+              <span
+                className="inline-flex items-center rounded-[3px] px-1 text-[9px] font-bold leading-none"
+                style={{
+                  backgroundColor: "var(--status-branch-divergence)",
+                  color: "var(--status-branch-divergence-fg)",
+                }}
+                title={`${ahead} ahead of remote`}
+                aria-label={`${ahead} ahead`}
+              >
+                {ahead}↑
+              </span>
+            )}
+            {behind > 0 && (
+              <span
+                className="inline-flex items-center rounded-[3px] px-1 text-[9px] font-bold leading-none"
+                style={{
+                  backgroundColor: "var(--status-branch-divergence)",
+                  color: "var(--status-branch-divergence-fg)",
+                }}
+                title={`${behind} behind remote`}
+                aria-label={`${behind} behind`}
+              >
+                {behind}↓
               </span>
             )}
           </span>

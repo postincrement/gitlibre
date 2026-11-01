@@ -158,6 +158,18 @@ pub fn resolve_repo_path(repo_path: &Path, relative: &str) -> CoreResult<std::pa
     Ok(joined)
 }
 
+/// Options for [`commit_index`], matching SourceTree Commit Options.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommitOptions {
+    pub amend: bool,
+    /// Append a `Signed-off-by` trailer (`git commit -s`).
+    pub sign_off: bool,
+    /// GPG/SSH sign the commit (`git commit -S`) using the configured signing key.
+    pub sign_commit: bool,
+    /// Skip pre-commit and commit-msg hooks (`git commit --no-verify`).
+    pub no_verify: bool,
+}
+
 /// Create a commit from the current index.
 ///
 /// When `identity` has name/email, they are applied via `-c user.*` for this
@@ -166,19 +178,19 @@ pub async fn commit_index(
     executor: &GitExecutor,
     repo_path: &Path,
     message: &str,
-    amend: bool,
+    options: CommitOptions,
     identity: Option<&CommitIdentity>,
 ) -> CoreResult<String> {
     validate_repo(repo_path)?;
     let message = message.trim();
-    if message.is_empty() && !amend {
+    if message.is_empty() && !options.amend {
         return Err(CoreError::new(
             ErrorCode::ProcessFailed,
             "Commit message must not be empty.",
         ));
     }
 
-    if !amend {
+    if !options.amend {
         let staged = executor
             .run(repo_path, &["diff", "--cached", "--quiet"])
             .await?;
@@ -208,8 +220,17 @@ pub async fn commit_index(
         }
     }
     args.push("commit".into());
-    if amend {
+    if options.amend {
         args.push("--amend".into());
+    }
+    if options.sign_off {
+        args.push("--signoff".into());
+    }
+    if options.sign_commit {
+        args.push("--gpg-sign".into());
+    }
+    if options.no_verify {
+        args.push("--no-verify".into());
     }
     if message.is_empty() {
         // Amend only: keep the previous subject/body.
@@ -229,6 +250,86 @@ pub async fn commit_index(
         )));
     }
     Ok(head.stdout_lossy().trim().to_string())
+}
+
+/// Subject + body of `HEAD` (for amend pre-fill).
+pub async fn read_head_commit_message(
+    executor: &GitExecutor,
+    repo_path: &Path,
+) -> CoreResult<String> {
+    validate_repo(repo_path)?;
+    let out = executor
+        .run(repo_path, &["log", "-1", "--pretty=format:%B"])
+        .await?;
+    if !out.success() {
+        return Err(CoreError::process_failed(format!(
+            "git log failed: {}",
+            out.stderr_lossy().trim()
+        )));
+    }
+    Ok(out.stdout_lossy().trim_end().to_string())
+}
+
+/// Push the current branch to its upstream, or set upstream to `origin`.
+pub async fn push_current_branch(
+    executor: &GitExecutor,
+    repo_path: &Path,
+    auth: Option<&crate::auth::GitAuth>,
+) -> CoreResult<String> {
+    validate_repo(repo_path)?;
+
+    let upstream = executor
+        .run_with_auth(
+            repo_path,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            auth,
+        )
+        .await?;
+
+    let out = if upstream.success() {
+        executor
+            .run_with_auth(repo_path, &["push"], auth)
+            .await?
+    } else {
+        // No upstream yet — push current HEAD to origin and set upstream.
+        let branch = executor
+            .run(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await?;
+        if !branch.success() {
+            return Err(CoreError::process_failed(format!(
+                "git rev-parse failed: {}",
+                branch.stderr_lossy().trim()
+            )));
+        }
+        let name = branch.stdout_lossy().trim().to_string();
+        if name.is_empty() || name == "HEAD" {
+            return Err(CoreError::new(
+                ErrorCode::ProcessFailed,
+                "Cannot push: detached HEAD with no upstream.",
+            ));
+        }
+        executor
+            .run_with_auth(
+                repo_path,
+                &["push", "-u", "origin", &name],
+                auth,
+            )
+            .await?
+    };
+
+    if !out.success() {
+        return Err(CoreError::map_git_failure(
+            &out.stderr_lossy(),
+            &out.stdout_lossy(),
+        ));
+    }
+    let summary = out.stderr_lossy();
+    let summary = summary.trim();
+    Ok(if summary.is_empty() {
+        "Push completed".into()
+    } else {
+        summary.lines().last().unwrap_or("Push completed").to_string()
+    })
 }
 
 fn validate_repo(repo_path: &Path) -> CoreResult<()> {
@@ -342,9 +443,15 @@ mod tests {
             email: Some("scry@example.com".into()),
             is_local: false,
         };
-        let oid = commit_index(&executor, &repo, "update a", false, Some(&identity))
-            .await
-            .unwrap();
+        let oid = commit_index(
+            &executor,
+            &repo,
+            "update a",
+            CommitOptions::default(),
+            Some(&identity),
+        )
+        .await
+        .unwrap();
         assert_eq!(oid.len(), 40);
 
         let show = executor
@@ -365,9 +472,15 @@ mod tests {
         stage_paths(&executor, &repo, &["d.txt".into()])
             .await
             .unwrap();
-        commit_index(&executor, &repo, "add d", false, None)
-            .await
-            .unwrap();
+        commit_index(
+            &executor,
+            &repo,
+            "add d",
+            CommitOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
 
         stop_tracking_paths(&executor, &repo, &["d.txt".into()])
             .await
@@ -378,9 +491,15 @@ mod tests {
         stage_paths(&executor, &repo, &["e.txt".into()])
             .await
             .unwrap();
-        commit_index(&executor, &repo, "add e", false, None)
-            .await
-            .unwrap();
+        commit_index(
+            &executor,
+            &repo,
+            "add e",
+            CommitOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
         remove_paths(&executor, &repo, &["e.txt".into()], ChangeArea::Unstaged)
             .await
             .unwrap();

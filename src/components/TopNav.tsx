@@ -6,6 +6,7 @@ interface TopNavProps {
   canFetchRepo: boolean;
   repoFetching: boolean;
   busy: boolean;
+  onCommit: () => void;
   onPullRepo: () => void;
   onFetchRepo: () => void;
   onFetchAll: () => void;
@@ -17,6 +18,7 @@ export function TopNav({
   canFetchRepo,
   repoFetching,
   busy,
+  onCommit,
   onPullRepo,
   onFetchRepo,
   onFetchAll,
@@ -55,6 +57,7 @@ export function TopNav({
           <ToolbarIconButton
             label="Commit"
             disabled={repoActionsDisabled}
+            onClick={onCommit}
             icon={<IconPlus />}
           />
           <ToolbarIconButton

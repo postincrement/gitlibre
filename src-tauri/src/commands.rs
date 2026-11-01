@@ -6,9 +6,10 @@ use crate::dto::{
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
     commit_index, detect_repo_account, detect_repo_account_from_remote, discard_paths,
-    inspect_repository, list_local_branches_for_remote, remove_paths, resolve_repo_path,
-    stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId, AuthKind, BranchInfo,
-    ChangeArea, CommitIdentity, CoreError, GitAuth, RepositoryId, WorkspaceId,
+    inspect_repository, list_local_branches_for_remote, push_current_branch, remove_paths,
+    resolve_repo_path, stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId,
+    AuthKind, BranchInfo, ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth,
+    RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
@@ -961,23 +962,89 @@ pub fn reveal_repository_file(
     })
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitRequestOptions {
+    #[serde(default)]
+    pub amend: bool,
+    #[serde(default)]
+    pub sign_off: bool,
+    #[serde(default)]
+    pub sign_commit: bool,
+    #[serde(default)]
+    pub no_verify: bool,
+}
+
 #[tauri::command]
 pub async fn commit_repository(
     id: RepositoryId,
     message: String,
     amend: Option<bool>,
+    options: Option<CommitRequestOptions>,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let path = repo_path(&state, id)?;
     let identity = resolve_commit_identity_for_repo(&state, id)?;
     let executor = state.coordinator.executor().clone();
-    let amend = amend.unwrap_or(false);
+    let opts = options.unwrap_or(CommitRequestOptions {
+        amend: amend.unwrap_or(false),
+        sign_off: false,
+        sign_commit: false,
+        no_verify: false,
+    });
+    let commit_opts = CommitOptions {
+        amend: opts.amend || amend.unwrap_or(false),
+        sign_off: opts.sign_off,
+        sign_commit: opts.sign_commit,
+        no_verify: opts.no_verify,
+    };
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
             async move {
-                commit_index(&executor, &path, &message, amend, identity.as_ref())
+                commit_index(
+                    &executor,
+                    &path,
+                    &message,
+                    commit_opts,
+                    identity.as_ref(),
+                )
+                .await
+                .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn read_head_commit_message(
+    id: RepositoryId,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let path = repo_path(&state, id)?;
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    gitlibre_core::read_head_commit_message(state.coordinator.executor(), &path)
+        .await
+        .map_err(AppErrorDto::from)
+}
+
+#[tauri::command]
+pub async fn push_repository(
+    id: RepositoryId,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let path = repo_path(&state, id)?;
+    let auth = resolve_auth_for_repo(&state, id)?;
+    let executor = state.coordinator.executor().clone();
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move {
+                push_current_branch(&executor, &path, auth.as_ref())
                     .await
                     .map_err(AppErrorDto::from)
             }
