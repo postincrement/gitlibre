@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BlameLine, RepositoryId, WorkspaceId } from "../types/models";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 import { formatCommitTime } from "../lib/commitGraphLayout";
 import {
   clampFileAnnotateColumnWidth,
@@ -54,7 +55,7 @@ export function FileAnnotateDialog({
       } catch (e) {
         if (!cancelled) {
           setLines([]);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(formatError(e));
           setLoading(false);
         }
       }

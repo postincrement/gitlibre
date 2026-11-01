@@ -66,11 +66,11 @@ Compared to C++ coroutines / thread pools: Rust futures are inert until polled; 
 
 Share ownership only at boundaries that need it (coordinator clone into tasks). Prefer passing `&AppState` into helpers rather than wrapping everything in `Arc`.
 
-## Process I/O and `PathBuf`
+## Paths and blocking Git work
 
-**Where:** `GitExecutor`
+**Where:** `git::session` and `git::transport`
 
-Paths are `PathBuf` / `OsString`, not assumed UTF-8 (important on Windows). Arguments are argv arrays — never `sh -c`. `GIT_TERMINAL_PROMPT=0` fails auth fast instead of hanging the UI.
+Paths are `PathBuf` / `OsString`, not assumed UTF-8 (important on Windows). Repository work goes through `git2` on `spawn_blocking` so the UI thread is not stuck inside libgit2. SSH and HTTPS credentials are supplied in-process; GitLibre does not spawn `git` or `ssh`.
 
 ## Serde
 

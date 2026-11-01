@@ -100,6 +100,44 @@ impl CoreError {
         Self::new(ErrorCode::ProcessFailed, detail)
     }
 
+    pub fn from_git2(err: git2::Error) -> Self {
+        let message = err.message().to_string();
+        let lower = message.to_lowercase();
+        if err.code() == git2::ErrorCode::Auth
+            || lower.contains("authentication")
+            || lower.contains("permission denied")
+            || lower.contains("publickey")
+            || lower.contains("401")
+            || lower.contains("403")
+            || lower.contains("credentials")
+            || lower.contains("assign an account")
+        {
+            return Self::new(
+                ErrorCode::AuthenticationFailed,
+                format!("Authentication failed. Assign an account in GitLibre and retry. {message}"),
+            );
+        }
+        if err.class() == git2::ErrorClass::Net
+            || err.class() == git2::ErrorClass::Ssl
+            || lower.contains("could not resolve")
+            || lower.contains("failed to connect")
+            || lower.contains("network")
+            || lower.contains("timed out")
+        {
+            return Self::new(
+                ErrorCode::NetworkUnavailable,
+                format!("Network unavailable or remote unreachable. {message}"),
+            );
+        }
+        if err.class() == git2::ErrorClass::Ssh {
+            return Self::new(
+                ErrorCode::AuthenticationFailed,
+                format!("Authentication failed. Assign an account in GitLibre and retry. {message}"),
+            );
+        }
+        Self::new(ErrorCode::ProcessFailed, message)
+    }
+
     pub fn map_git_failure(stderr: &str, stdout: &str) -> Self {
         let combined = format!("{stderr}\n{stdout}").to_lowercase();
         if combined.contains("authentication")
@@ -112,7 +150,7 @@ impl CoreError {
             return Self::new(
                 ErrorCode::AuthenticationFailed,
                 format!(
-                    "Authentication failed. Configure credentials for system Git and retry. {stderr}"
+                    "Authentication failed. Assign an account in GitLibre and retry. {stderr}"
                 ),
             );
         }

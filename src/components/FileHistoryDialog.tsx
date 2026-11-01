@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CommitInfo, RepositoryId, WorkspaceId } from "../types/models";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 import { formatCommitTime } from "../lib/commitGraphLayout";
 import {
   clampFileLogColumnWidth,
@@ -57,7 +58,7 @@ export function FileHistoryDialog({
       } catch (e) {
         if (!cancelled) {
           setCommits([]);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(formatError(e));
           setLoading(false);
         }
       }

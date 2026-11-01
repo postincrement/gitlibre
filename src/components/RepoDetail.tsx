@@ -8,6 +8,7 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 import type { ContentViewMode } from "../lib/contentView";
 import {
   UNCOMMITTED_COMMIT_ID,
@@ -23,8 +24,9 @@ import {
   loadDetailPaneHeight,
   persistDetailPaneHeight,
 } from "../lib/detailSplit";
-import { CommitGraph } from "./CommitGraph";
+import { CommitGraph, type CommitContextAction } from "./CommitGraph";
 import { CommitFilesPane } from "./CommitFilesPane";
+import { PromptModal } from "./Modal";
 import { VerticalSplitHandle } from "./VerticalSplitHandle";
 
 const COMMIT_PAGE_SIZE = 100;
@@ -79,6 +81,11 @@ export function RepoDetail({
   /** Repo id whose saved commit selection still needs applying. */
   const pendingRestoreRepoRef = useRef<RepositoryId | null>(null);
   const [workingTreeReady, setWorkingTreeReady] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [prompt, setPrompt] = useState<{
+    kind: "tag" | "branch";
+    commit: CommitInfo;
+  } | null>(null);
 
   useEffect(() => {
     detailHeightRef.current = detailHeight;
@@ -115,7 +122,7 @@ export function RepoDetail({
     } catch (e) {
       setCommits([]);
       setHasMore(false);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
     } finally {
       setLoading(false);
     }
@@ -139,7 +146,7 @@ export function RepoDetail({
       });
       setHasMore(more);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
       setHasMore(false);
     } finally {
       loadingMoreRef.current = false;
@@ -200,7 +207,7 @@ export function RepoDetail({
         if (!cancelled) {
           setHasUncommittedFiles(false);
           setStatusFiles([]);
-          setStatusFilesError(e instanceof Error ? e.message : String(e));
+          setStatusFilesError(formatError(e));
           setStatusFilesLoading(false);
           setWorkingTreeReady(true);
         }
@@ -335,7 +342,7 @@ export function RepoDetail({
       } catch (e) {
         if (!cancelled) {
           setFiles([]);
-          setFilesError(e instanceof Error ? e.message : String(e));
+          setFilesError(formatError(e));
           setFilesLoading(false);
         }
       }
@@ -402,6 +409,67 @@ export function RepoDetail({
     await refreshWorkingTree();
     setWorkingTreeReady(true);
   }, [status?.available, status?.repositoryId, loadInitial, refreshWorkingTree]);
+
+  const refreshAfterRefChange = useCallback(async () => {
+    if (!status?.available) return;
+    pendingRestoreRepoRef.current = status.repositoryId;
+    setWorkingTreeReady(false);
+    await loadInitial(status.repositoryId);
+    await refreshWorkingTree();
+    setWorkingTreeReady(true);
+  }, [status?.available, status?.repositoryId, loadInitial, refreshWorkingTree]);
+
+  const handleCommitAction = useCallback(
+    (action: CommitContextAction, commit: CommitInfo) => {
+      if (!status?.available || isUncommittedCommit(commit) || actionBusy) return;
+      if (action === "checkout") {
+        void (async () => {
+          setActionBusy(true);
+          setError(null);
+          try {
+            await api.checkoutRepositoryRevision(status.repositoryId, commit.id);
+            await refreshAfterRefChange();
+          } catch (e) {
+            setError(formatActionError(e));
+          } finally {
+            setActionBusy(false);
+          }
+        })();
+        return;
+      }
+      setPrompt({ kind: action, commit });
+    },
+    [status?.available, status?.repositoryId, actionBusy, refreshAfterRefChange],
+  );
+
+  const handlePromptSubmit = useCallback(
+    (name: string) => {
+      if (!status?.available || !prompt || actionBusy) return;
+      const { kind, commit } = prompt;
+      setPrompt(null);
+      void (async () => {
+        setActionBusy(true);
+        setError(null);
+        try {
+          if (kind === "branch") {
+            await api.createRepositoryBranch(
+              status.repositoryId,
+              name,
+              commit.id,
+            );
+          } else {
+            await api.createRepositoryTag(status.repositoryId, name, commit.id);
+          }
+          await refreshAfterRefChange();
+        } catch (e) {
+          setError(formatActionError(e));
+        } finally {
+          setActionBusy(false);
+        }
+      })();
+    },
+    [status?.available, status?.repositoryId, prompt, actionBusy, refreshAfterRefChange],
+  );
 
   const selectCommitById = useCallback(
     (commitId: string) => {
@@ -488,8 +556,10 @@ export function RepoDetail({
             loadingMore={loadingMore}
             hasMore={hasMore}
             error={error}
+            actionBusy={actionBusy}
             onLoadMore={loadMore}
             onSelectCommit={selectCommit}
+            onCommitAction={handleCommitAction}
           />
         </div>
         <VerticalSplitHandle onDrag={onSplitDrag} onDragEnd={onSplitDragEnd} />
@@ -504,13 +574,26 @@ export function RepoDetail({
             files={files}
             loading={filesLoading}
             error={filesError}
-            hideCommitComposer
+            pushTargetLabel={pushTargetLabel(status)}
             onWorkingTreeChanged={() => void refreshWorkingTree()}
             onCommitted={() => void refreshAfterCommit()}
             onSelectCommitId={selectCommitById}
           />
         </div>
       </div>
+      {prompt && (
+        <PromptModal
+          title={prompt.kind === "branch" ? "Create Branch" : "Create Tag"}
+          label={
+            prompt.kind === "branch"
+              ? `Branch name at ${prompt.commit.shortId}`
+              : `Tag name at ${prompt.commit.shortId}`
+          }
+          confirmLabel="Create"
+          onSubmit={handlePromptSubmit}
+          onCancel={() => setPrompt(null)}
+        />
+      )}
     </main>
   );
 }
@@ -520,4 +603,12 @@ function pushTargetLabel(status: RepoStatus): string | null {
   if (status.detachedHead || !status.currentBranch) return null;
   const remote = status.remotes[0]?.name ?? "origin";
   return `${remote}/${status.currentBranch}`;
+}
+
+function formatActionError(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e) {
+    return String((e as { message: unknown }).message);
+  }
+  return "Unexpected error";
 }

@@ -13,6 +13,7 @@ import {
 } from "./components/SidebarResizeHandle";
 import { WorkspaceOpenModal } from "./components/WorkspaceOpenModal";
 import * as api from "./lib/api";
+import { formatError } from "./lib/formatError";
 import {
   onMenuAccounts,
   onMenuNewWorkspace,
@@ -638,6 +639,7 @@ export default function App() {
         workspaceName={windowWorkspace?.name ?? null}
         repoName={selected?.displayName ?? null}
         canFetchRepo={Boolean(selected?.available)}
+        repoHasAccount={Boolean(selected?.accountId)}
         repoFetching={Boolean(selected?.isFetching)}
         busy={busy}
         onCommit={() => handleContentViewChange("fileStatus")}
@@ -740,10 +742,3 @@ export default function App() {
   );
 }
 
-function formatError(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e) {
-    return String((e as { message: unknown }).message);
-  }
-  return "Unexpected error";
-}

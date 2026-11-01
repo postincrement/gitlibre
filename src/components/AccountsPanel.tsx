@@ -9,6 +9,7 @@ import type {
 } from "../types/models";
 import { Modal } from "./Modal";
 import * as api from "../lib/api";
+import { formatError } from "../lib/formatError";
 
 interface AccountsPanelProps {
   accounts: Account[];
@@ -556,10 +557,3 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function formatError(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e) {
-    return String((e as { message: unknown }).message);
-  }
-  return "Unexpected error";
-}

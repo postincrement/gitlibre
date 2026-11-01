@@ -1,5 +1,7 @@
 use crate::error::{CoreError, CoreResult};
-use crate::git::{read_commit_identity, GitExecutor, RemoteInfo};
+use crate::git::session::{blocking, open_repo};
+use crate::git::status::remote_infos;
+use crate::git::{read_commit_identity, RemoteInfo};
 use crate::ids::AccountId;
 use crate::models::{Account, AuthKind, HostingProvider};
 use crate::ssh_config::{resolve_alias, ResolvedSshHost};
@@ -53,16 +55,14 @@ pub struct ParsedRemoteUrl {
 /// When `remote_name` is set, that remote is used instead of the usual
 /// `origin`-or-first primary selection.
 pub async fn detect_repo_account(
-    executor: &GitExecutor,
     repo_path: &Path,
     known_accounts: &[Account],
 ) -> CoreResult<DetectedRepoAccount> {
-    detect_repo_account_from_remote(executor, repo_path, known_accounts, None).await
+    detect_repo_account_from_remote(repo_path, known_accounts, None).await
 }
 
 /// Like [`detect_repo_account`], but prefer a named remote when provided.
 pub async fn detect_repo_account_from_remote(
-    executor: &GitExecutor,
     repo_path: &Path,
     known_accounts: &[Account],
     remote_name: Option<&str>,
@@ -71,7 +71,7 @@ pub async fn detect_repo_account_from_remote(
         return Err(CoreError::path_not_found(repo_path.display()));
     }
 
-    let remotes = list_remotes(executor, repo_path).await?;
+    let remotes = list_remotes(repo_path).await?;
     let chosen = match remote_name {
         Some(name) => {
             let remote = remotes.iter().find(|r| r.name == name).ok_or_else(|| {
@@ -89,7 +89,7 @@ pub async fn detect_repo_account_from_remote(
         .map(|r| parse_remote_url(&r.fetch_url))
         .unwrap_or(None);
 
-    let commit_identity = read_commit_identity(executor, repo_path).await?;
+    let commit_identity = read_commit_identity(repo_path).await?;
 
     let ssh_resolved = parsed.as_ref().and_then(|p| {
         if p.auth_kind == AuthKind::SshKey {
@@ -226,46 +226,14 @@ fn pick_primary_remote(remotes: &[RemoteInfo]) -> Option<&RemoteInfo> {
         .or_else(|| remotes.first())
 }
 
-async fn list_remotes(
-    executor: &GitExecutor,
-    repo_path: &Path,
-) -> CoreResult<Vec<RemoteInfo>> {
-    let out = executor.run(repo_path, &["remote", "-v"]).await?;
-    if !out.success() {
-        return Ok(Vec::new());
-    }
-    Ok(parse_remotes_text(&out.stdout_lossy()))
-}
-
-fn parse_remotes_text(text: &str) -> Vec<RemoteInfo> {
-    use std::collections::BTreeMap;
-    let mut map: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
-    for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let name = parts[0].to_string();
-        let url = parts[1].to_string();
-        let kind = parts[2];
-        let entry = map.entry(name).or_insert((None, None));
-        if kind.contains("fetch") {
-            entry.0 = Some(url);
-        } else if kind.contains("push") {
-            entry.1 = Some(url);
-        }
-    }
-    map.into_iter()
-        .map(|(name, (fetch, push))| {
-            let fetch_url = fetch.clone().unwrap_or_default();
-            let push_url = push.unwrap_or_else(|| fetch.unwrap_or_default());
-            RemoteInfo {
-                name,
-                fetch_url,
-                push_url,
-            }
-        })
-        .collect()
+async fn list_remotes(repo_path: &Path) -> CoreResult<Vec<RemoteInfo>> {
+    let path = repo_path.to_path_buf();
+    blocking(move || match open_repo(&path) {
+        Ok(repo) => remote_infos(&repo),
+        Err(err) if err.code == crate::error::ErrorCode::NotAGitRepository => Ok(Vec::new()),
+        Err(err) => Err(err),
+    })
+    .await
 }
 
 /// Parse common Git remote URL forms into provider/auth/owner hints.
@@ -390,7 +358,6 @@ mod tests {
     use super::*;
     use crate::ids::AccountId;
     use std::fs;
-    use std::process::Command;
     use tempfile::tempdir;
 
     #[test]
@@ -463,38 +430,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let repo = dir.path().join("repo");
         fs::create_dir(&repo).unwrap();
-        assert!(Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args([
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/scrypos/demo.git"
-            ])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "--local", "user.name", "Scry Dev"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
-        assert!(Command::new("git")
-            .args(["config", "--local", "user.email", "dev@scry.example"])
-            .current_dir(&repo)
-            .status()
-            .unwrap()
-            .success());
+        let git_repo = crate::testutil::init_repo(&repo);
+        git_repo
+            .remote("origin", "https://github.com/scrypos/demo.git")
+            .unwrap();
+        crate::testutil::set_identity(&git_repo, "Scry Dev", "dev@scry.example");
 
-        let executor = GitExecutor::from_path().unwrap();
-        let detected = detect_repo_account(&executor, &repo, &[]).await.unwrap();
+        let detected = detect_repo_account(&repo, &[]).await.unwrap();
         assert_eq!(detected.provider, HostingProvider::GitHub);
         assert_eq!(detected.auth_kind, AuthKind::HttpsToken);
         assert_eq!(detected.suggested_username.as_deref(), Some("scrypos"));

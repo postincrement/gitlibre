@@ -5,7 +5,7 @@
 - [x] Tauri 2 + React + TypeScript desktop shell
 - [x] Named workspaces with JSON persistence
 - [x] Add / remove local Git repositories (no disk mutation)
-- [x] Sidebar + detail status via system Git
+- [x] Sidebar + detail status via libgit2 (`git2`)
 - [x] Individual and workspace-wide fetch with progress events
 - [x] Automated tests against temporary local / bare remotes
 
@@ -15,9 +15,9 @@
 - [x] OS keychain storage for HTTPS tokens (`keyring`)
 - [x] Per-repository authentication identity assignment
 - [x] Separate optional commit name/email on the account (not used for auth)
-- [x] Per-invocation HTTPS Bearer auth / SSH `GIT_SSH_COMMAND` (no global credential switching)
+- [x] Per-invocation HTTPS bearer auth and libssh2 SSH keys (no host `git`/`ssh`, no global credential switching)
 - [x] Detect accounts from remotes + `~/.ssh/config` + local `user.name` / `user.email`
-- [x] Apply account commit identity to commit operations (`-c user.name` / `user.email`)
+- [x] Apply account commit identity to the commit signature without writing Git config
 - [ ] GitHub OAuth device flow (currently PAT entry)
 - [ ] Validate tokens against provider APIs before save
 
@@ -49,4 +49,4 @@
 - Subscriptions or artificial feature locks
 - Electron or a Node.js backend server
 - Embedded database for early configuration
-- libgit2 / `git2` (revisit only if system Git proves insufficient)
+- Launching Git for Windows, OpenSSH, PuTTY, or TortoisePlink (credentials stay inside GitLibre; `.ppk`, PuTTY sessions, Pageant, and the OpenSSH agent are future in-process sources)

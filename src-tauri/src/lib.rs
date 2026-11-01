@@ -3,7 +3,7 @@ mod dto;
 mod menu;
 mod state;
 
-use gitlibre_core::{ConfigStore, GitExecutor};
+use gitlibre_core::ConfigStore;
 use state::AppState;
 use std::fs;
 use tauri::Manager;
@@ -22,15 +22,7 @@ pub fn run() {
             let config_path = config_dir.join("config.json");
 
             let store = ConfigStore::open(config_path).expect("failed to open config store");
-            let executor = match GitExecutor::from_path() {
-                Ok(executor) => executor,
-                Err(err) => {
-                    eprintln!("GitLibre warning: {err}");
-                    GitExecutor::from_explicit_path(std::path::PathBuf::from("git"))
-                }
-            };
-
-            app.manage(AppState::new(store, executor));
+            app.manage(AppState::new(store));
 
             let app_menu = menu::build_menu(app.handle())?;
             app.set_menu(app_menu)?;
@@ -60,6 +52,9 @@ pub fn run() {
             commands::get_repository_status,
             commands::list_repository_branches,
             commands::list_remote_branches,
+            commands::checkout_repository_revision,
+            commands::create_repository_branch,
+            commands::create_repository_tag,
             commands::list_repository_commits,
             commands::list_file_commits,
             commands::blame_file,

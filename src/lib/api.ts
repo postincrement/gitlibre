@@ -124,6 +124,29 @@ export async function listRemoteBranches(
   return invoke<string[]>("list_remote_branches", { id, remoteName });
 }
 
+export async function checkoutRepositoryRevision(
+  id: RepositoryId,
+  revision: string,
+): Promise<void> {
+  return invoke<void>("checkout_repository_revision", { id, revision });
+}
+
+export async function createRepositoryBranch(
+  id: RepositoryId,
+  name: string,
+  revision: string,
+): Promise<void> {
+  return invoke<void>("create_repository_branch", { id, name, revision });
+}
+
+export async function createRepositoryTag(
+  id: RepositoryId,
+  name: string,
+  revision: string,
+): Promise<void> {
+  return invoke<void>("create_repository_tag", { id, name, revision });
+}
+
 export async function listRepositoryCommits(
   id: RepositoryId,
   options?: { limit?: number; skip?: number },
