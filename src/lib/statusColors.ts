@@ -34,8 +34,8 @@ export const DEFAULT_STATUS_COLORS: StatusColors = {
   new: "#654982",
   /** Deleted files. */
   deleted: "#999999",
-  /** Renamed / copied files (matches prior accent until a final default is chosen). */
-  replaced: "#3d8bfd",
+  /** Renamed / copied files. */
+  replaced: "#a96e78",
   /** Changed-file count badge on repository rows. */
   repoChanges: "#3472b0",
   /** Local branch chips. */

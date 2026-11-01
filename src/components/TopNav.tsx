@@ -220,15 +220,16 @@ function IconBranch() {
   );
 }
 
-/** Vertical trunk with a branch joining from the right at ~45°. */
+/** Vertical trunk with an arrow joining from the bottom-right. */
 function IconMerge() {
   return (
     <svg {...iconProps()}>
       <path d="M6 2.5v11" />
       <circle cx="6" cy="3.5" r="1.35" fill="currentColor" stroke="none" />
       <circle cx="6" cy="12.5" r="1.35" fill="currentColor" stroke="none" />
-      <path d="M11.5 3.5 6 8.5" />
-      <circle cx="12" cy="3.25" r="1.35" fill="currentColor" stroke="none" />
+      <path d="M12 12.5 6.75 8" />
+      <path d="M6.75 8l2.6-.15M6.75 8l.15 2.6" />
+      <circle cx="12" cy="12.5" r="1.35" fill="currentColor" stroke="none" />
     </svg>
   );
 }

@@ -175,8 +175,11 @@ export function RepoDetail({
     void loadInitial(status.repositoryId);
   }, [status?.repositoryId, status?.available, status?.lastFetchSummary, loadInitial]);
 
+  const statusFilesLoadKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!status?.available) {
+      statusFilesLoadKeyRef.current = null;
       setHasUncommittedFiles(false);
       setStatusFiles([]);
       setStatusFilesError(null);
@@ -185,8 +188,12 @@ export function RepoDetail({
       return;
     }
 
+    const loadKey = `${status.repositoryId}:${status.lastFetchSummary ?? ""}:${contentView}`;
+    const showLoading = statusFilesLoadKeyRef.current !== loadKey;
+    statusFilesLoadKeyRef.current = loadKey;
+
     let cancelled = false;
-    if (contentView === "fileStatus") {
+    if (showLoading && contentView === "fileStatus") {
       setStatusFilesLoading(true);
       setStatusFilesError(null);
     }
@@ -317,17 +324,26 @@ export function RepoDetail({
     }
   }, [graphCommits, selectedCommit, status?.repositoryId]);
 
+  const commitFilesLoadKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!status?.available || !selectedCommit) {
+      commitFilesLoadKeyRef.current = null;
       setFiles([]);
       setFilesError(null);
       setFilesLoading(false);
       return;
     }
 
+    const loadKey = `${status.repositoryId}:${selectedCommit.id}`;
+    const showLoading = commitFilesLoadKeyRef.current !== loadKey;
+    commitFilesLoadKeyRef.current = loadKey;
+
     let cancelled = false;
-    setFilesLoading(true);
-    setFilesError(null);
+    if (showLoading) {
+      setFilesLoading(true);
+      setFilesError(null);
+    }
 
     void (async () => {
       try {
@@ -355,7 +371,7 @@ export function RepoDetail({
     status?.available,
     status?.repositoryId,
     selectedCommit?.id,
-    // Refresh uncommitted file list when working tree counts change.
+    // Quiet-refresh uncommitted files when porcelain counts change (no loading flash).
     status?.workingTree?.modified,
     status?.workingTree?.added,
     status?.workingTree?.deleted,
