@@ -13,6 +13,7 @@ interface TopNavProps {
   onPushRepo: () => void;
   onFetchRepo: () => void;
   onFetchAll: () => void;
+  onRefreshView: () => void;
 }
 
 export function TopNav({
@@ -28,6 +29,7 @@ export function TopNav({
   onPushRepo,
   onFetchRepo,
   onFetchAll,
+  onRefreshView,
 }: TopNavProps) {
   const title =
     workspaceName && repoName
@@ -95,6 +97,13 @@ export function TopNav({
             dashed
             onClick={onFetchRepo}
             icon={<IconArrowDown />}
+          />
+          <ToolbarIconButton
+            label="Refresh"
+            disabled={repoActionsDisabled}
+            title="Refresh the history or file list"
+            onClick={onRefreshView}
+            icon={<IconRefresh />}
           />
           <ToolbarIconButton
             label="Branch"
@@ -291,6 +300,15 @@ function IconArrowDown() {
   return (
     <svg {...iconProps()}>
       <path d="M8 3v9.5M4.5 9.5 8 13l3.5-3.5" />
+    </svg>
+  );
+}
+
+function IconRefresh() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M13.2 8A5.2 5.2 0 1 1 11.6 4" />
+      <path d="M11.5 2.4v2.7H8.8" />
     </svg>
   );
 }

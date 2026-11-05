@@ -367,8 +367,27 @@ pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreRe
     require_auth_for_url(&prepared, auth)
         .map_err(|err| named_auth_error(&remote_name, err))?;
     let ssh = ssh_inputs(auth, &original_url, config.as_ref());
-    let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
-    let callbacks = remote_callbacks(auth, &prepared, ssh.as_ref(), |_| {});
+    let dst = repo
+        .config()
+        .ok()
+        .and_then(|cfg| cfg.get_string(&format!("branch.{branch_name}.merge")).ok())
+        .filter(|name| name.starts_with("refs/heads/"))
+        .unwrap_or_else(|| format!("refs/heads/{branch_name}"));
+    let refspec = format!("refs/heads/{branch_name}:{dst}");
+    let mut callbacks = remote_callbacks(auth, &prepared, ssh.as_ref(), |_| {});
+    // libgit2 reports a successful push even when the server rejects the update
+    // unless this callback fails the operation.
+    let rejection: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let rejection_slot = Rc::clone(&rejection);
+    callbacks.push_update_reference(move |refname, status| {
+        if let Some(status) = status {
+            *rejection_slot.borrow_mut() =
+                Some(format!("{refname} was rejected by the remote ({status})."));
+            Err(git2::Error::from_str("push rejected"))
+        } else {
+            Ok(())
+        }
+    });
     let mut options = git2::PushOptions::new();
     options.remote_callbacks(callbacks);
     let mut remote = if prepared.url != original_url {
@@ -378,6 +397,30 @@ pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreRe
     };
     remote
         .push(&[&refspec], Some(&mut options))
+        .map_err(|err| {
+            if let Some(detail) = rejection.borrow().clone() {
+                return CoreError::new(ErrorCode::ProcessFailed, format!("Push failed. {detail}"));
+            }
+            let mapped = map_git2(err);
+            if mapped
+                .message
+                .contains("contains commits that are not present locally")
+            {
+                return CoreError::new(
+                    ErrorCode::ProcessFailed,
+                    "Push failed. The remote branch has commits that are not on this branch. Pull before pushing.",
+                );
+            }
+            mapped
+        })?;
+    let tracking_branch = dst.trim_start_matches("refs/heads/");
+    let tracking = format!("refs/remotes/{remote_name}/{tracking_branch}");
+    let head_oid = repo
+        .find_reference(&format!("refs/heads/{branch_name}"))
+        .map_err(map_git2)?
+        .target()
+        .ok_or_else(|| CoreError::process_failed("Pushed branch has no commit."))?;
+    repo.reference(&tracking, head_oid, true, "update by push")
         .map_err(map_git2)?;
     if branch.upstream().is_err() {
         let mut cfg = repo.config().map_err(map_git2)?;
@@ -584,5 +627,80 @@ Host github-work
         let prepared = prepare_remote_url("/tmp/remote.git", None);
         assert!(!prepared.is_ssh);
         assert!(ssh_callback_inputs("/tmp/remote.git", Path::new("/key"), None).is_none());
+    }
+
+    #[test]
+    fn push_updates_the_remote_and_the_tracking_ref() {
+        use crate::auth::RemoteAuthSet;
+        use crate::testutil;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let bare_path = dir.path().join("remote.git");
+        let local_path = dir.path().join("local");
+        testutil::init_bare(&bare_path);
+        let local = testutil::init_repo(&local_path);
+        testutil::commit_file(&local, "f.txt", "one\n", "one");
+        let url = bare_path.to_string_lossy().into_owned();
+        testutil::add_remote(&local, "origin", &url);
+        testutil::push_branch(&local, "origin", "main");
+        testutil::commit_file(&local, "f.txt", "two\n", "two");
+
+        let summary = push_current_branch(&local_path, &RemoteAuthSet::default()).unwrap();
+        assert_eq!(summary, "Push completed");
+
+        let local_oid = git2::Repository::open(&local_path)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        let bare_oid = git2::Repository::open(&bare_path)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        assert_eq!(bare_oid, local_oid);
+        let tracking = git2::Repository::open(&local_path)
+            .unwrap()
+            .find_reference("refs/remotes/origin/main")
+            .unwrap()
+            .target()
+            .unwrap();
+        assert_eq!(tracking, local_oid);
+    }
+
+    #[test]
+    fn push_reports_a_rejected_non_fast_forward() {
+        use crate::auth::RemoteAuthSet;
+        use crate::testutil;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let bare_path = dir.path().join("remote.git");
+        let local_path = dir.path().join("local");
+        let other_path = dir.path().join("other");
+        testutil::init_bare(&bare_path);
+        let local = testutil::init_repo(&local_path);
+        testutil::commit_file(&local, "f.txt", "base\n", "base");
+        let url = bare_path.to_string_lossy().into_owned();
+        testutil::add_remote(&local, "origin", &url);
+        testutil::push_branch(&local, "origin", "main");
+
+        let other = testutil::clone_repo(&url, &other_path);
+        testutil::set_identity(&other, "B", "b@example.com");
+        testutil::commit_file(&other, "f.txt", "remote\n", "remote");
+        testutil::push_branch(&other, "origin", "main");
+
+        testutil::commit_file(&local, "f.txt", "local\n", "local");
+        let err = push_current_branch(&local_path, &RemoteAuthSet::default()).unwrap_err();
+        assert!(
+            err.message.contains("Pull before pushing"),
+            "{err:?}"
+        );
+        let bare = git2::Repository::open(&bare_path).unwrap();
+        let bare_tip = bare.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(bare_tip.message().unwrap(), "remote");
     }
 }

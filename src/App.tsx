@@ -82,6 +82,8 @@ export default function App() {
     title: string;
     message: string;
   } | null>(null);
+  /** Bumped to reload the open history or file view. */
+  const [viewGeneration, setViewGeneration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [showSplash, setShowSplash] = useState(true);
@@ -340,6 +342,7 @@ export default function App() {
               prev.map((s) => (s.repositoryId === fresh.repositoryId ? fresh : s)),
             );
             if (fresh.repositoryId === selectedIdRef.current) {
+              setViewGeneration((n) => n + 1);
               void refreshBranches(fresh.repositoryId, fresh.remotes);
             }
           });
@@ -571,6 +574,7 @@ export default function App() {
       setBusy(true);
       setRemoteOp({ title: "Push", message: `Pushing ${name}…` });
       await api.pushRepository(selectedId);
+      setViewGeneration((n) => n + 1);
       if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
     } catch (e) {
       setError(formatError(e));
@@ -594,6 +598,13 @@ export default function App() {
       setBusy(false);
       setRemoteOp(null);
     }
+  }
+
+  async function handleRefreshView() {
+    if (!selectedId) return;
+    setError(null);
+    setViewGeneration((n) => n + 1);
+    if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
   }
 
   async function handleFetchAll() {
@@ -738,6 +749,7 @@ export default function App() {
         onPushRepo={handlePushOne}
         onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}
+        onRefreshView={handleRefreshView}
       />
       {error && (
         <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
@@ -775,6 +787,8 @@ export default function App() {
           status={selected}
           branches={branches}
           contentView={contentView}
+          viewGeneration={viewGeneration}
+          onRefreshViews={() => setViewGeneration((n) => n + 1)}
           onWorkingTreeChanged={() => {
             if (windowWorkspaceId) void refreshStatuses(windowWorkspaceId);
             if (selectedId) void refreshBranches(selectedId);

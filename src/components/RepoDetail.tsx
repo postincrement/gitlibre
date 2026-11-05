@@ -47,6 +47,10 @@ interface RepoDetailProps {
   status: RepoStatus | null;
   branches: BranchInfo[];
   contentView: ContentViewMode;
+  /** Changes when the open history or file view should reload. */
+  viewGeneration: number;
+  /** Ask the parent to reload history and the file list. */
+  onRefreshViews?: () => void;
   /** Refresh status (and sidebar dirty indicators) after local mutations. */
   onWorkingTreeChanged?: () => void;
 }
@@ -56,6 +60,8 @@ export function RepoDetail({
   status,
   branches,
   contentView,
+  viewGeneration,
+  onRefreshViews,
   onWorkingTreeChanged,
 }: RepoDetailProps) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
@@ -179,6 +185,7 @@ export function RepoDetail({
     status?.currentBranch,
     status?.detachedHead,
     status?.lastFetchSummary,
+    viewGeneration,
     loadInitial,
   ]);
 
@@ -242,6 +249,7 @@ export function RepoDetail({
     status?.workingTree?.renamed,
     status?.workingTree?.conflicted,
     contentView,
+    viewGeneration,
   ]);
 
   const graphCommits = useMemo(
@@ -431,7 +439,14 @@ export function RepoDetail({
     setFiles([]);
     await refreshWorkingTree();
     setWorkingTreeReady(true);
-  }, [status?.available, status?.repositoryId, loadInitial, refreshWorkingTree]);
+    onRefreshViews?.();
+  }, [
+    status?.available,
+    status?.repositoryId,
+    loadInitial,
+    refreshWorkingTree,
+    onRefreshViews,
+  ]);
 
   const refreshAfterRefChange = useCallback(async () => {
     if (!status?.available) return;
