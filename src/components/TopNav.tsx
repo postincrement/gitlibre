@@ -10,6 +10,7 @@ interface TopNavProps {
   onRenameWorkspace: (name: string) => Promise<void>;
   onCommit: () => void;
   onPullRepo: () => void;
+  onPushRepo: () => void;
   onFetchRepo: () => void;
   onFetchAll: () => void;
 }
@@ -24,6 +25,7 @@ export function TopNav({
   onRenameWorkspace,
   onCommit,
   onPullRepo,
+  onPushRepo,
   onFetchRepo,
   onFetchAll,
 }: TopNavProps) {
@@ -79,6 +81,7 @@ export function TopNav({
                 ? undefined
                 : "Assign an account to a remote to push"
             }
+            onClick={onPushRepo}
             icon={<IconArrowUp />}
           />
           <ToolbarIconButton

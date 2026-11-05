@@ -563,6 +563,23 @@ export default function App() {
     }
   }
 
+  async function handlePushOne() {
+    if (!selectedId) return;
+    const name = selected?.displayName ?? "repository";
+    try {
+      setError(null);
+      setBusy(true);
+      setRemoteOp({ title: "Push", message: `Pushing ${name}…` });
+      await api.pushRepository(selectedId);
+      if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+      setRemoteOp(null);
+    }
+  }
+
   async function handleFetchOne() {
     if (!selectedId) return;
     const name = selected?.displayName ?? "repository";
@@ -718,6 +735,7 @@ export default function App() {
         onRenameWorkspace={handleRenameWorkspace}
         onCommit={() => handleContentViewChange("fileStatus")}
         onPullRepo={handlePullOne}
+        onPushRepo={handlePushOne}
         onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}
       />
