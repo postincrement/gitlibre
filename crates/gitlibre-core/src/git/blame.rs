@@ -1,6 +1,6 @@
 use crate::error::{CoreError, CoreResult};
-use crate::git::session::{blocking, map_git2, open_repo};
 use crate::git::UNCOMMITTED_COMMIT_ID;
+use crate::git::session::{blocking, map_git2, open_repo};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -150,10 +150,8 @@ fn parse_blame_porcelain(text: &str) -> Vec<BlameLine> {
 
     for raw in text.lines() {
         if let Some(content) = raw.strip_prefix('\t') {
-            let (name, email, time, tz) = meta_by_commit
-                .get(&commit_id)
-                .cloned()
-                .unwrap_or_else(|| {
+            let (name, email, time, tz) =
+                meta_by_commit.get(&commit_id).cloned().unwrap_or_else(|| {
                     (
                         author_name.clone(),
                         author_email.clone(),
@@ -180,9 +178,7 @@ fn parse_blame_porcelain(text: &str) -> Vec<BlameLine> {
         // Header: <40-char-hash> <sourceline> <resultline> [<num>]
         let mut parts = raw.split_whitespace();
         let maybe_hash = parts.next().unwrap_or("");
-        if maybe_hash.len() >= 40
-            && maybe_hash.bytes().all(|b| b.is_ascii_hexdigit())
-        {
+        if maybe_hash.len() >= 40 && maybe_hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             commit_id = maybe_hash.to_string();
             let _source = parts.next();
             result_line = parts

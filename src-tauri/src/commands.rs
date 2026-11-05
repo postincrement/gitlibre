@@ -5,12 +5,12 @@ use crate::dto::{
 };
 use crate::state::{AppState, LiveRepoState};
 use gitlibre_core::{
+    Account, AccountId, AuthKind, BranchInfo, ChangeArea, CommitIdentity, CommitOptions, CoreError,
+    GitAuth, RemoteAccount, RemoteAuthSet, RepositoryId, StashEntry, WorkspaceId, apply_stash,
     checkout_revision, commit_index, create_branch_at, create_tag_at, detect_repo_account,
-    detect_repo_account_from_remote, discard_paths, inspect_repository,
-    list_local_branches_for_remote, push_current_branch, remove_paths, resolve_repo_path,
-    stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId, AuthKind, BranchInfo,
-    ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth, RemoteAccount, RemoteAuthSet,
-    RepositoryId, WorkspaceId,
+    detect_repo_account_from_remote, discard_paths, drop_stash, inspect_repository,
+    list_local_branches_for_remote, list_stashes, pop_stash, push_current_branch, remove_paths,
+    resolve_repo_path, save_stash, stage_paths, stop_tracking_paths, unstage_paths,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
@@ -181,7 +181,9 @@ pub fn get_snapshot(state: State<'_, AppState>) -> CmdResult<AppSnapshot> {
 #[tauri::command]
 pub fn create_workspace(name: String, state: State<'_, AppState>) -> CmdResult<WorkspaceDto> {
     let mut store = lock_store(&state)?;
-    let ws = store.create_workspace(name.trim()).map_err(AppErrorDto::from)?;
+    let ws = store
+        .create_workspace(name.trim())
+        .map_err(AppErrorDto::from)?;
     Ok(ws.into())
 }
 
@@ -208,10 +210,7 @@ pub fn delete_workspace(id: WorkspaceId, state: State<'_, AppState>) -> CmdResul
 }
 
 #[tauri::command]
-pub fn set_active_workspace(
-    id: WorkspaceId,
-    state: State<'_, AppState>,
-) -> CmdResult<AppSnapshot> {
+pub fn set_active_workspace(id: WorkspaceId, state: State<'_, AppState>) -> CmdResult<AppSnapshot> {
     let mut store = lock_store(&state)?;
     store.set_active_workspace(id).map_err(AppErrorDto::from)?;
     drop(store);
@@ -244,12 +243,13 @@ pub async fn add_repository(
         store.list_accounts().to_vec()
     };
 
-    let detection = match detect_repo_account(&repo.path, &accounts)
-        .await
-    {
+    let detection = match detect_repo_account(&repo.path, &accounts).await {
         Ok(d) => Some(d),
         Err(err) => {
-            eprintln!("GitLibre: account detection failed for {}: {err}", repo.path.display());
+            eprintln!(
+                "GitLibre: account detection failed for {}: {err}",
+                repo.path.display()
+            );
             None
         }
     };
@@ -289,18 +289,18 @@ pub async fn detect_repository_account(
         (repo.path, store.list_accounts().to_vec())
     };
 
-    let detected = detect_repo_account_from_remote(
-        &path,
-        &accounts,
-        remote_name.as_deref(),
-    )
-    .await
-    .map_err(AppErrorDto::from)?;
+    let detected = detect_repo_account_from_remote(&path, &accounts, remote_name.as_deref())
+        .await
+        .map_err(AppErrorDto::from)?;
 
     // If a match exists and the repo is unassigned, assign it.
     if let Some(account_id) = detected.matched_account_id {
         let mut store = lock_store(&state)?;
-        if store.get_repository(id).and_then(|r| r.account_id).is_none() {
+        if store
+            .get_repository(id)
+            .and_then(|r| r.account_id)
+            .is_none()
+        {
             let _ = store.set_repository_account(id, Some(account_id));
         }
     }
@@ -510,10 +510,7 @@ pub async fn pick_file(app: AppHandle) -> CmdResult<Option<String>> {
 /// Open a file dialog starting in `~/.ssh` so hidden-directory browsing is not required.
 #[tauri::command]
 pub async fn pick_ssh_key(app: AppHandle) -> CmdResult<Option<String>> {
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Select SSH private key");
+    let mut dialog = app.dialog().file().set_title("Select SSH private key");
 
     if let Some(ssh_dir) = ssh_dir_path() {
         if ssh_dir.is_dir() {
@@ -620,12 +617,9 @@ pub async fn list_repository_branches(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    list_local_branches_for_remote(
-        &path,
-        remote_name.as_deref(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    list_local_branches_for_remote(&path, remote_name.as_deref())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -645,12 +639,9 @@ pub async fn list_remote_branches(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    gitlibre_core::list_remote_branches(
-        &path,
-        remote_name.trim(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    gitlibre_core::list_remote_branches(&path, remote_name.trim())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -667,12 +658,9 @@ pub async fn checkout_repository_revision(
             .path
             .clone()
     };
-    checkout_revision(
-        &path,
-        revision.trim(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    checkout_revision(&path, revision.trim())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -690,13 +678,9 @@ pub async fn create_repository_branch(
             .path
             .clone()
     };
-    create_branch_at(
-        &path,
-        name.trim(),
-        revision.trim(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    create_branch_at(&path, name.trim(), revision.trim())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -714,13 +698,9 @@ pub async fn create_repository_tag(
             .path
             .clone()
     };
-    create_tag_at(
-        &path,
-        name.trim(),
-        revision.trim(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    create_tag_at(&path, name.trim(), revision.trim())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -785,10 +765,7 @@ pub async fn blame_file(
     gitlibre_core::blame_file(
         &repo_path,
         path.trim(),
-        commit
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
+        commit.as_deref().map(str::trim).filter(|s| !s.is_empty()),
     )
     .await
     .map_err(AppErrorDto::from)
@@ -811,12 +788,9 @@ pub async fn list_commit_files(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    gitlibre_core::list_commit_files(
-        &path,
-        commit.trim(),
-    )
-    .await
-    .map_err(AppErrorDto::from)
+    gitlibre_core::list_commit_files(&path, commit.trim())
+        .await
+        .map_err(AppErrorDto::from)
 }
 
 #[tauri::command]
@@ -874,10 +848,7 @@ pub async fn get_commit_file_preview(
         )));
     }
     let trimmed_path = path.trim();
-    let trimmed_old = old_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let trimmed_old = old_path.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let pair = gitlibre_core::get_commit_file_bytes_pair(
         &repo_path,
         commit.trim(),
@@ -904,11 +875,7 @@ pub async fn get_commit_file_preview(
 }
 
 fn mime_type_for_path(path: &str) -> String {
-    let ext = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -936,11 +903,7 @@ pub async fn stage_repository_paths(
         .with_repo_lock(&path, || {
             let path = path.clone();
             let paths = paths.clone();
-            async move {
-                stage_paths(&path, &paths)
-                    .await
-                    .map_err(AppErrorDto::from)
-            }
+            async move { stage_paths(&path, &paths).await.map_err(AppErrorDto::from) }
         })
         .await
 }
@@ -1052,9 +1015,7 @@ pub fn open_repository_file(
     let repo = repo_path(&state, id)?;
     let abs = resolve_repo_path(&repo, &path).map_err(AppErrorDto::from)?;
     if !abs.exists() {
-        return Err(AppErrorDto::from(CoreError::path_not_found(
-            abs.display(),
-        )));
+        return Err(AppErrorDto::from(CoreError::path_not_found(abs.display())));
     }
     app.opener()
         .open_path(abs.to_string_lossy(), None::<&str>)
@@ -1074,14 +1035,14 @@ pub fn reveal_repository_file(
     let repo = repo_path(&state, id)?;
     let abs = resolve_repo_path(&repo, &path).map_err(AppErrorDto::from)?;
     if !abs.exists() {
-        return Err(AppErrorDto::from(CoreError::path_not_found(
-            abs.display(),
-        )));
+        return Err(AppErrorDto::from(CoreError::path_not_found(abs.display())));
     }
-    app.opener().reveal_item_in_dir(&abs).map_err(|err| AppErrorDto {
-        code: "process_failed".into(),
-        message: format!("Failed to reveal file: {err}"),
-    })
+    app.opener()
+        .reveal_item_in_dir(&abs)
+        .map_err(|err| AppErrorDto {
+            code: "process_failed".into(),
+            message: format!("Failed to reveal file: {err}"),
+        })
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1124,14 +1085,9 @@ pub async fn commit_repository(
         .with_repo_lock(&path, || {
             let path = path.clone();
             async move {
-                commit_index(
-                    &path,
-                    &message,
-                    commit_opts,
-                    identity.as_ref(),
-                )
-                .await
-                .map_err(AppErrorDto::from)
+                commit_index(&path, &message, commit_opts, identity.as_ref())
+                    .await
+                    .map_err(AppErrorDto::from)
             }
         })
         .await
@@ -1152,10 +1108,7 @@ pub async fn read_head_commit_message(
 }
 
 #[tauri::command]
-pub async fn push_repository(
-    id: RepositoryId,
-    state: State<'_, AppState>,
-) -> CmdResult<String> {
+pub async fn push_repository(id: RepositoryId, state: State<'_, AppState>) -> CmdResult<String> {
     let path = repo_path(&state, id)?;
     let auth = resolve_remote_auth(&state, id)?;
     state
@@ -1168,6 +1121,89 @@ pub async fn push_repository(
                     .await
                     .map_err(AppErrorDto::from)
             }
+        })
+        .await
+}
+
+#[tauri::command(rename = "list_stashes")]
+pub async fn list_repository_stashes(
+    id: RepositoryId,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<StashEntry>> {
+    let path = repo_path(&state, id)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    list_stashes(&path).await.map_err(AppErrorDto::from)
+}
+
+#[tauri::command(rename = "save_stash")]
+pub async fn save_repository_stash(
+    id: RepositoryId,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let path = repo_path(&state, id)?;
+    let identity = resolve_commit_identity_for_repo(&state, id)?;
+    let include_untracked = include_untracked.unwrap_or(true);
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move {
+                save_stash(&path, message, include_untracked, identity)
+                    .await
+                    .map_err(AppErrorDto::from)
+            }
+        })
+        .await
+}
+
+#[tauri::command(rename = "apply_stash")]
+pub async fn apply_repository_stash(
+    id: RepositoryId,
+    index: usize,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move { apply_stash(&path, index).await.map_err(AppErrorDto::from) }
+        })
+        .await
+}
+
+#[tauri::command(rename = "pop_stash")]
+pub async fn pop_repository_stash(
+    id: RepositoryId,
+    index: usize,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move { pop_stash(&path, index).await.map_err(AppErrorDto::from) }
+        })
+        .await
+}
+
+#[tauri::command(rename = "drop_stash")]
+pub async fn drop_repository_stash(
+    id: RepositoryId,
+    index: usize,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = repo_path(&state, id)?;
+    state
+        .coordinator
+        .with_repo_lock(&path, || {
+            let path = path.clone();
+            async move { drop_stash(&path, index).await.map_err(AppErrorDto::from) }
         })
         .await
 }
@@ -1190,15 +1226,7 @@ pub async fn get_repository_status(
             repo.remote_accounts,
         )
     };
-    status_for_repo(
-        &state,
-        id,
-        display_name,
-        path,
-        account_id,
-        remote_accounts,
-    )
-    .await
+    status_for_repo(&state, id, display_name, path, account_id, remote_accounts).await
 }
 
 #[tauri::command]

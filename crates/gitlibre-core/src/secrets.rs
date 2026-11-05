@@ -121,7 +121,10 @@ mod tests {
         let id = AccountId::new();
         assert!(store.get_token(id).unwrap().is_none());
         store.set_token(id, "secret-token").unwrap();
-        assert_eq!(store.get_token(id).unwrap().as_deref(), Some("secret-token"));
+        assert_eq!(
+            store.get_token(id).unwrap().as_deref(),
+            Some("secret-token")
+        );
         store.delete_token(id).unwrap();
         assert!(store.get_token(id).unwrap().is_none());
     }

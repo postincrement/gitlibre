@@ -1,10 +1,10 @@
 use crate::error::{CoreError, CoreResult};
 use crate::git::session::{blocking, open_repo};
 use crate::git::status::remote_infos;
-use crate::git::{read_commit_identity, RemoteInfo};
+use crate::git::{RemoteInfo, read_commit_identity};
 use crate::ids::AccountId;
 use crate::models::{Account, AuthKind, HostingProvider};
-use crate::ssh_config::{resolve_alias, ResolvedSshHost};
+use crate::ssh_config::{ResolvedSshHost, resolve_alias};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -203,9 +203,7 @@ fn match_account(detected: &DetectedRepoAccount, accounts: &[Account]) -> Option
 
     accounts
         .iter()
-        .find(|a| {
-            a.provider == detected.provider && a.username.eq_ignore_ascii_case(username)
-        })
+        .find(|a| a.provider == detected.provider && a.username.eq_ignore_ascii_case(username))
         .map(|a| a.id)
 }
 
@@ -258,7 +256,9 @@ fn parse_scp_ssh(url: &str) -> Option<ParsedRemoteUrl> {
         return None;
     }
     let (user_host, path) = url.split_once(':')?;
-    if path.contains('\\') || path.starts_with('/') && !user_host.contains('@') && !user_host.contains('.') {
+    if path.contains('\\')
+        || path.starts_with('/') && !user_host.contains('@') && !user_host.contains('.')
+    {
         // Avoid Windows paths like C:\...
         if user_host.len() == 1 {
             return None;
@@ -307,11 +307,7 @@ fn parse_scheme_url(url: &str) -> Option<ParsedRemoteUrl> {
         (None, authority)
     };
 
-    let host = host_port
-        .split(':')
-        .next()
-        .unwrap_or(host_port)
-        .to_string();
+    let host = host_port.split(':').next().unwrap_or(host_port).to_string();
     if host.is_empty() {
         return None;
     }

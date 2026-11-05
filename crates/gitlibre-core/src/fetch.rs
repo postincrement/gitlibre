@@ -99,7 +99,7 @@ impl FetchCoordinator {
             RemoteAuthSet::default(),
             on_progress,
         )
-            .await
+        .await
     }
 
     pub async fn fetch_one_with_auth<F>(
@@ -152,7 +152,9 @@ impl FetchCoordinator {
         }
         let result = match handle.await {
             Ok(result) => result,
-            Err(err) => Err(CoreError::process_failed(format!("Fetch task failed: {err}"))),
+            Err(err) => Err(CoreError::process_failed(format!(
+                "Fetch task failed: {err}"
+            ))),
         };
 
         match result {
@@ -266,9 +268,7 @@ mod tests {
         let coordinator = FetchCoordinator::new();
 
         let id = RepositoryId::new();
-        let ok = coordinator
-            .fetch_one(id, &local, |_| {})
-            .await;
+        let ok = coordinator.fetch_one(id, &local, |_| {}).await;
         assert!(ok.success, "{ok:?}");
 
         let lonely = dir.path().join("lonely");
@@ -293,10 +293,7 @@ mod tests {
         testutil::init_repo(&bad);
 
         let coordinator = FetchCoordinator::new();
-        let repos = vec![
-            (RepositoryId::new(), good),
-            (RepositoryId::new(), bad),
-        ];
+        let repos = vec![(RepositoryId::new(), good), (RepositoryId::new(), bad)];
         let summary = coordinator.fetch_many(repos, |_| {}).await;
         assert_eq!(summary.total, 2);
         assert_eq!(summary.succeeded, 1);

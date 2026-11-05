@@ -15,6 +15,7 @@ import type {
   ChangeArea,
   CommitFileChange,
   CommitInfo,
+  StashEntry,
   Workspace,
   WorkspaceFetchFinishedEvent,
   WorkspaceId,
@@ -343,6 +344,34 @@ export async function readHeadCommitMessage(id: RepositoryId): Promise<string> {
 
 export async function pushRepository(id: RepositoryId): Promise<string> {
   return invoke<string>("push_repository", { id });
+}
+
+export async function listStashes(id: RepositoryId): Promise<StashEntry[]> {
+  return invoke<StashEntry[]>("list_stashes", { id });
+}
+
+export async function saveStash(
+  id: RepositoryId,
+  message: string,
+  includeUntracked: boolean,
+): Promise<string> {
+  return invoke<string>("save_stash", {
+    id,
+    message: message.trim() ? message : null,
+    includeUntracked,
+  });
+}
+
+export async function applyStash(id: RepositoryId, index: number): Promise<void> {
+  return invoke<void>("apply_stash", { id, index });
+}
+
+export async function popStash(id: RepositoryId, index: number): Promise<void> {
+  return invoke<void>("pop_stash", { id, index });
+}
+
+export async function dropStash(id: RepositoryId, index: number): Promise<void> {
+  return invoke<void>("drop_stash", { id, index });
 }
 
 export async function listWorkspaceStatuses(

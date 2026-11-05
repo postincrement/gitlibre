@@ -8,7 +8,7 @@
 use crate::auth::{GitAuth, RemoteAuthSet};
 use crate::error::{CoreError, CoreResult, ErrorCode};
 use crate::git::session::{map_git2, open_repo, string_list};
-use crate::ssh_config::{default_ssh_config_path, SshConfigFile};
+use crate::ssh_config::{SshConfigFile, default_ssh_config_path};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -126,7 +126,11 @@ fn parse_ssh_url(url: &str) -> Option<SshParts> {
     if host.is_empty() {
         return None;
     }
-    Some(SshParts { user, host, path: path.to_string() })
+    Some(SshParts {
+        user,
+        host,
+        path: path.to_string(),
+    })
 }
 
 fn is_http_url(url: &str) -> bool {
@@ -341,10 +345,7 @@ pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreRe
             "Cannot push: detached HEAD with no upstream.",
         ));
     }
-    let branch_name = head
-        .shorthand()
-        .map_err(map_git2)?
-        .to_string();
+    let branch_name = head.shorthand().map_err(map_git2)?.to_string();
     let branch = repo
         .find_branch(&branch_name, git2::BranchType::Local)
         .map_err(map_git2)?;
@@ -354,9 +355,7 @@ pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreRe
         .and_then(|_| {
             repo.config()
                 .ok()
-                .and_then(|cfg| {
-                    cfg.get_string(&format!("branch.{branch_name}.remote")).ok()
-                })
+                .and_then(|cfg| cfg.get_string(&format!("branch.{branch_name}.remote")).ok())
         })
         .unwrap_or_else(|| "origin".to_string());
     let auth = auth_set.for_remote(&remote_name);
@@ -364,8 +363,7 @@ pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreRe
     let original_url = named.url().unwrap_or("").to_string();
     let config = load_ssh_config();
     let prepared = prepare_remote_url(&original_url, config.as_ref());
-    require_auth_for_url(&prepared, auth)
-        .map_err(|err| named_auth_error(&remote_name, err))?;
+    require_auth_for_url(&prepared, auth).map_err(|err| named_auth_error(&remote_name, err))?;
     let ssh = ssh_inputs(auth, &original_url, config.as_ref());
     let dst = repo
         .config()
@@ -455,9 +453,7 @@ pub fn pull_current_branch(
     }
     let head = repo.head().map_err(map_git2)?;
     if !head.is_branch() {
-        return Err(CoreError::process_failed(
-            "Cannot pull: HEAD is detached.",
-        ));
+        return Err(CoreError::process_failed("Cannot pull: HEAD is detached."));
     }
     let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
     let remote_name = repo
@@ -485,9 +481,7 @@ pub fn pull_current_branch(
     let their_oid = fetch_head
         .target()
         .ok_or_else(|| CoreError::process_failed("FETCH_HEAD did not point at a commit."))?;
-    let annotated = repo
-        .find_annotated_commit(their_oid)
-        .map_err(map_git2)?;
+    let annotated = repo.find_annotated_commit(their_oid).map_err(map_git2)?;
     let (analysis, _) = repo.merge_analysis(&[&annotated]).map_err(map_git2)?;
     if analysis.is_up_to_date() {
         return Ok(PullRun {
@@ -515,7 +509,11 @@ pub fn pull_current_branch(
     let tree_id = index.write_tree_to(&repo).map_err(map_git2)?;
     let tree = repo.find_tree(tree_id).map_err(map_git2)?;
     let sig = signature_from_config(&repo)?;
-    let head_commit = repo.head().map_err(map_git2)?.peel_to_commit().map_err(map_git2)?;
+    let head_commit = repo
+        .head()
+        .map_err(map_git2)?
+        .peel_to_commit()
+        .map_err(map_git2)?;
     let their = repo.find_commit(their_oid).map_err(map_git2)?;
     let message = format!("Merge branch '{branch_name}'");
     repo.commit(
@@ -536,8 +534,11 @@ pub fn pull_current_branch(
 
 fn fast_forward(repo: &git2::Repository, branch_name: &str, oid: git2::Oid) -> CoreResult<()> {
     let commit = repo.find_commit(oid).map_err(map_git2)?;
-    repo.checkout_tree(commit.as_object(), Some(git2::build::CheckoutBuilder::new().force()))
-        .map_err(map_git2)?;
+    repo.checkout_tree(
+        commit.as_object(),
+        Some(git2::build::CheckoutBuilder::new().force()),
+    )
+    .map_err(map_git2)?;
     let refname = format!("refs/heads/{branch_name}");
     repo.reference(&refname, oid, true, "pull: fast-forward")
         .map_err(map_git2)?;
@@ -605,17 +606,10 @@ Host github-work
         assert_eq!(prepared.url, "ssh://git@github.com/org/repo.git");
         assert!(prepared.is_ssh);
         let identity = prepared.identity_file.expect("identity file");
-        assert!(
-            identity.ends_with("id_ed25519_work"),
-            "{identity:?}"
-        );
+        assert!(identity.ends_with("id_ed25519_work"), "{identity:?}");
 
-        let inputs = ssh_callback_inputs(
-            "git@github-work:org/repo.git",
-            &identity,
-            Some(&config),
-        )
-        .expect("ssh inputs");
+        let inputs = ssh_callback_inputs("git@github-work:org/repo.git", &identity, Some(&config))
+            .expect("ssh inputs");
         assert_eq!(inputs.url, "ssh://git@github.com/org/repo.git");
         assert_eq!(inputs.username, "git");
         assert_eq!(inputs.private_key_path, identity);
@@ -695,10 +689,7 @@ Host github-work
 
         testutil::commit_file(&local, "f.txt", "local\n", "local");
         let err = push_current_branch(&local_path, &RemoteAuthSet::default()).unwrap_err();
-        assert!(
-            err.message.contains("Pull before pushing"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("Pull before pushing"), "{err:?}");
         let bare = git2::Repository::open(&bare_path).unwrap();
         let bare_tip = bare.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(bare_tip.message().unwrap(), "remote");

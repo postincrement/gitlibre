@@ -1,7 +1,7 @@
 use crate::error::{CoreError, CoreResult, ErrorCode};
 use crate::ids::{AccountId, RepositoryId, WorkspaceId};
 use crate::models::{
-    migrate_config, Account, AppConfig, AuthKind, RemoteAccount, Repository, Workspace,
+    Account, AppConfig, AuthKind, RemoteAccount, Repository, Workspace, migrate_config,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,8 +20,7 @@ impl ConfigStore {
         let path = path.into();
         let config = if path.exists() {
             let raw = fs::read_to_string(&path).map_err(CoreError::config_io)?;
-            let parsed: AppConfig =
-                serde_json::from_str(&raw).map_err(CoreError::config_parse)?;
+            let parsed: AppConfig = serde_json::from_str(&raw).map_err(CoreError::config_parse)?;
             migrate_config(parsed)
         } else {
             AppConfig::default()
@@ -41,9 +40,8 @@ impl ConfigStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(CoreError::config_io)?;
         }
-        let json = serde_json::to_string_pretty(&self.config).map_err(|e| {
-            CoreError::new(crate::error::ErrorCode::Internal, e.to_string())
-        })?;
+        let json = serde_json::to_string_pretty(&self.config)
+            .map_err(|e| CoreError::new(crate::error::ErrorCode::Internal, e.to_string()))?;
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, json.as_bytes()).map_err(CoreError::config_io)?;
         fs::rename(&tmp, &self.path).map_err(CoreError::config_io)?;
@@ -156,10 +154,7 @@ impl ConfigStore {
     }
 
     /// Canonicalize `path`, validate it is a Git repo, and add it to the active workspace.
-    pub fn add_repository_to_active(
-        &mut self,
-        path: impl AsRef<Path>,
-    ) -> CoreResult<Repository> {
+    pub fn add_repository_to_active(&mut self, path: impl AsRef<Path>) -> CoreResult<Repository> {
         let active_id = self
             .config
             .active_workspace_id
@@ -306,9 +301,7 @@ impl ConfigStore {
     pub fn update_account(&mut self, account: Account) -> CoreResult<Account> {
         validate_account(&account)?;
         if self.config.accounts.iter().any(|a| {
-            a.id != account.id
-                && a.provider == account.provider
-                && a.username == account.username
+            a.id != account.id && a.provider == account.provider && a.username == account.username
         }) {
             return Err(CoreError::new(
                 ErrorCode::InvalidAccount,
@@ -632,9 +625,7 @@ mod tests {
         store
             .set_remote_account(repo.id, "upstream", Some(upstream.id))
             .unwrap();
-        store
-            .set_remote_account(repo.id, "fork", None)
-            .unwrap();
+        store.set_remote_account(repo.id, "fork", None).unwrap();
 
         let saved = store.get_repository(repo.id).unwrap();
         assert_eq!(saved.account_for_remote("origin"), Some(origin.id));
@@ -646,7 +637,9 @@ mod tests {
             .set_remote_account(repo.id, "origin", Some(missing))
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::AccountNotFound);
-        let err = store.set_remote_account(repo.id, "  ", Some(origin.id)).unwrap_err();
+        let err = store
+            .set_remote_account(repo.id, "  ", Some(origin.id))
+            .unwrap_err();
         assert_eq!(err.code, ErrorCode::Internal);
 
         store.delete_account(upstream.id).unwrap();

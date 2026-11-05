@@ -114,7 +114,9 @@ impl CoreError {
         {
             return Self::new(
                 ErrorCode::AuthenticationFailed,
-                format!("Authentication failed. Assign an account in GitLibre and retry. {message}"),
+                format!(
+                    "Authentication failed. Assign an account in GitLibre and retry. {message}"
+                ),
             );
         }
         if err.class() == git2::ErrorClass::Net
@@ -132,7 +134,9 @@ impl CoreError {
         if err.class() == git2::ErrorClass::Ssh {
             return Self::new(
                 ErrorCode::AuthenticationFailed,
-                format!("Authentication failed. Assign an account in GitLibre and retry. {message}"),
+                format!(
+                    "Authentication failed. Assign an account in GitLibre and retry. {message}"
+                ),
             );
         }
         Self::new(ErrorCode::ProcessFailed, message)
@@ -149,9 +153,7 @@ impl CoreError {
         {
             return Self::new(
                 ErrorCode::AuthenticationFailed,
-                format!(
-                    "Authentication failed. Assign an account in GitLibre and retry. {stderr}"
-                ),
+                format!("Authentication failed. Assign an account in GitLibre and retry. {stderr}"),
             );
         }
         if combined.contains("could not resolve host")
@@ -164,7 +166,9 @@ impl CoreError {
                 format!("Network unavailable or remote unreachable. {stderr}"),
             );
         }
-        if combined.contains("no remotes") || combined.contains("does not appear to be a git repository") {
+        if combined.contains("no remotes")
+            || combined.contains("does not appear to be a git repository")
+        {
             // fall through
         }
         Self::new(

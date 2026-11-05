@@ -3,13 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuild
 use uuid::Uuid;
 
 pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let settings = MenuItem::with_id(
-        app,
-        "settings",
-        "Settings…",
-        true,
-        Some("CmdOrCtrl+,"),
-    )?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
 
     #[cfg(target_os = "macos")]
     let app_menu = Submenu::with_items(
@@ -99,34 +93,12 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    let zoom_in = MenuItem::with_id(
-        app,
-        "zoom-in",
-        "Zoom In",
-        true,
-        Some("CmdOrCtrl+Plus"),
-    )?;
-    let zoom_out = MenuItem::with_id(
-        app,
-        "zoom-out",
-        "Zoom Out",
-        true,
-        Some("CmdOrCtrl+-"),
-    )?;
-    let zoom_reset = MenuItem::with_id(
-        app,
-        "zoom-reset",
-        "Actual Size",
-        true,
-        Some("CmdOrCtrl+0"),
-    )?;
+    let zoom_in = MenuItem::with_id(app, "zoom-in", "Zoom In", true, Some("CmdOrCtrl+Plus"))?;
+    let zoom_out = MenuItem::with_id(app, "zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
+    let zoom_reset =
+        MenuItem::with_id(app, "zoom-reset", "Actual Size", true, Some("CmdOrCtrl+0"))?;
 
-    let view_menu = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[&zoom_in, &zoom_out, &zoom_reset],
-    )?;
+    let view_menu = Submenu::with_items(app, "View", true, &[&zoom_in, &zoom_out, &zoom_reset])?;
 
     let window_menu = Submenu::with_items(
         app,

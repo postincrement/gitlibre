@@ -142,9 +142,7 @@ pub fn resolve_from_default_config(alias: &str) -> Option<ResolvedSshHost> {
     let config = SshConfigFile::load_path(&path)?;
     let resolved = config.resolve(alias);
     // Only treat as an alias rewrite when something actually changed / was set.
-    if resolved.host_name != alias
-        || resolved.user.is_some()
-        || !resolved.identity_files.is_empty()
+    if resolved.host_name != alias || resolved.user.is_some() || !resolved.identity_files.is_empty()
     {
         Some(resolved)
     } else {
@@ -285,12 +283,16 @@ Host *
         assert_eq!(resolved.host_name, "github.com");
         assert_eq!(resolved.user.as_deref(), Some("git"));
         assert_eq!(resolved.identity_files.len(), 2);
-        assert!(resolved.identity_files[0]
-            .to_string_lossy()
-            .ends_with("id_ed25519_work"));
-        assert!(resolved.identity_files[1]
-            .to_string_lossy()
-            .ends_with("id_ed25519"));
+        assert!(
+            resolved.identity_files[0]
+                .to_string_lossy()
+                .ends_with("id_ed25519_work")
+        );
+        assert!(
+            resolved.identity_files[1]
+                .to_string_lossy()
+                .ends_with("id_ed25519")
+        );
     }
 
     #[test]
@@ -307,7 +309,10 @@ Host github-work
         );
         let resolved = config.resolve("github-work");
         assert_eq!(resolved.host_name, "github.com");
-        assert_eq!(resolved.user.as_deref(), Some("ignored-because-user-not-set-above"));
+        assert_eq!(
+            resolved.user.as_deref(),
+            Some("ignored-because-user-not-set-above")
+        );
     }
 
     #[test]

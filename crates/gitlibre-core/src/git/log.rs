@@ -226,9 +226,9 @@ fn load_decorations(repo: &git2::Repository) -> CoreResult<HashMap<git2::Oid, Ve
             let entry = map.entry(commit.id()).or_default();
             entry.push("HEAD".into());
             if head.is_branch() {
-        if let Ok(name) = head.shorthand() {
-            push_unique(entry, name);
-        }
+                if let Ok(name) = head.shorthand() {
+                    push_unique(entry, name);
+                }
             }
         }
     }
@@ -343,10 +343,7 @@ fn parse_commit_record(record: &str) -> Option<CommitInfo> {
     let parents = if parents_raw.is_empty() {
         Vec::new()
     } else {
-        parents_raw
-            .split_whitespace()
-            .map(str::to_string)
-            .collect()
+        parents_raw.split_whitespace().map(str::to_string).collect()
     };
 
     Some(CommitInfo {
@@ -450,9 +447,11 @@ mod tests {
         assert!(commits.iter().any(|c| c.subject == "second on main"));
         assert!(commits.iter().any(|c| c.subject == "work on feature"));
         assert!(commits.iter().any(|c| c.refs.iter().any(|r| r == "main")));
-        assert!(commits
-            .iter()
-            .any(|c| c.refs.iter().any(|r| r == "feature")));
+        assert!(
+            commits
+                .iter()
+                .any(|c| c.refs.iter().any(|r| r == "feature"))
+        );
         assert!(!commits[0].parents.is_empty() || commits.len() == 1);
     }
 
@@ -475,19 +474,29 @@ mod tests {
             false,
         )
         .unwrap();
-        repo.tag("v-only", tag_only_commit.as_object(), &sig, "only tag", false)
-            .unwrap();
+        repo.tag(
+            "v-only",
+            tag_only_commit.as_object(),
+            &sig,
+            "only tag",
+            false,
+        )
+        .unwrap();
         repo.reset(on_branch_commit.as_object(), git2::ResetType::Hard, None)
             .unwrap();
 
         let commits = list_commits(&repo_path, Some(50), None).await.unwrap();
         assert!(commits.iter().any(|c| c.id == on_branch.to_string()));
         assert!(commits.iter().any(|c| c.id == tag_only.to_string()));
-        assert!(commits
-            .iter()
-            .any(|c| c.refs.iter().any(|r| r == "tag: v-on-branch")));
-        assert!(commits
-            .iter()
-            .all(|c| c.refs.iter().all(|r| r != "tag: v-only")));
+        assert!(
+            commits
+                .iter()
+                .any(|c| c.refs.iter().any(|r| r == "tag: v-on-branch"))
+        );
+        assert!(
+            commits
+                .iter()
+                .all(|c| c.refs.iter().all(|r| r != "tag: v-only"))
+        );
     }
 }

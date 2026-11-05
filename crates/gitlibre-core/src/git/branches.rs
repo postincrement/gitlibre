@@ -38,7 +38,10 @@ pub async fn list_local_branches_for_remote(
     blocking(move || list_local_branches_at(&path, remote_name.as_deref())).await
 }
 
-fn list_local_branches_at(repo_path: &Path, remote_name: Option<&str>) -> CoreResult<Vec<BranchInfo>> {
+fn list_local_branches_at(
+    repo_path: &Path,
+    remote_name: Option<&str>,
+) -> CoreResult<Vec<BranchInfo>> {
     let repo = open_repo(repo_path)?;
     let head_name = repo
         .head()
@@ -46,7 +49,10 @@ fn list_local_branches_at(repo_path: &Path, remote_name: Option<&str>) -> CoreRe
         .filter(|head| head.is_branch())
         .and_then(|head| head.shorthand().ok().map(str::to_string));
     let mut branches = Vec::new();
-    for branch in repo.branches(Some(git2::BranchType::Local)).map_err(map_git2)? {
+    for branch in repo
+        .branches(Some(git2::BranchType::Local))
+        .map_err(map_git2)?
+    {
         let (branch, _) = branch.map_err(map_git2)?;
         let Some(name) = branch.name().map_err(map_git2)? else {
             continue;
@@ -248,7 +254,8 @@ pub async fn create_tag_at(repo_path: &Path, name: &str, revision: &str) -> Core
     blocking(move || {
         let repo = open_repo(&path)?;
         let object = repo.revparse_single(&revision).map_err(map_git2)?;
-        repo.tag_lightweight(&name, &object, false).map_err(map_git2)?;
+        repo.tag_lightweight(&name, &object, false)
+            .map_err(map_git2)?;
         Ok(())
     })
     .await
@@ -390,8 +397,16 @@ mod tests {
 
         let branches = list_local_branches(&repo).await.unwrap();
         assert!(branches.iter().any(|b| b.name == "main" && b.is_current));
-        assert!(branches.iter().any(|b| b.name == "develop" && !b.is_current));
-        assert!(branches.iter().all(|b| b.behind.is_none() && b.ahead.is_none()));
+        assert!(
+            branches
+                .iter()
+                .any(|b| b.name == "develop" && !b.is_current)
+        );
+        assert!(
+            branches
+                .iter()
+                .all(|b| b.behind.is_none() && b.ahead.is_none())
+        );
     }
 
     #[test]
@@ -418,13 +433,8 @@ mod tests {
         let first_commit = repo.find_commit(first).unwrap();
         repo.reset(first_commit.as_object(), git2::ResetType::Hard, None)
             .unwrap();
-        repo.reference(
-            "refs/remotes/origin/main",
-            second,
-            true,
-            "test upstream",
-        )
-        .unwrap();
+        repo.reference("refs/remotes/origin/main", second, true, "test upstream")
+            .unwrap();
         repo.remote("origin", repo_path.to_str().unwrap()).unwrap();
 
         let branches = list_local_branches_for_remote(&repo_path, Some("origin"))
@@ -460,7 +470,10 @@ mod tests {
 
         let opened = git2::Repository::open(&repo_path).unwrap();
         assert_eq!(opened.head().unwrap().shorthand().unwrap(), "other");
-        assert_eq!(fs::read_to_string(repo_path.join("f.txt")).unwrap(), "other\n");
+        assert_eq!(
+            fs::read_to_string(repo_path.join("f.txt")).unwrap(),
+            "other\n"
+        );
     }
 
     #[tokio::test]
@@ -479,12 +492,12 @@ mod tests {
 
         fs::write(repo_path.join("f.txt"), "dirty\n").unwrap();
         let err = checkout_revision(&repo_path, "other").await.unwrap_err();
-        assert!(
-            err.message.contains("would be overwritten"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("would be overwritten"), "{err:?}");
         assert!(err.message.contains("f.txt"), "{err:?}");
-        assert_eq!(fs::read_to_string(repo_path.join("f.txt")).unwrap(), "dirty\n");
+        assert_eq!(
+            fs::read_to_string(repo_path.join("f.txt")).unwrap(),
+            "dirty\n"
+        );
         let opened = git2::Repository::open(&repo_path).unwrap();
         assert_eq!(opened.head().unwrap().shorthand().unwrap(), "main");
 

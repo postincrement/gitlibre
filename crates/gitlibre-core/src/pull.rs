@@ -58,7 +58,9 @@ impl FetchCoordinator {
             }
             let result = match handle.await {
                 Ok(result) => result,
-                Err(err) => Err(CoreError::process_failed(format!("Pull task failed: {err}"))),
+                Err(err) => Err(CoreError::process_failed(format!(
+                    "Pull task failed: {err}"
+                ))),
             };
 
             match result {
@@ -73,7 +75,10 @@ impl FetchCoordinator {
                 Ok(run) => PullOutcome {
                     repository_id,
                     success: false,
-                    summary: format!("Pull finished with {} conflict(s)", run.conflicted_paths.len()),
+                    summary: format!(
+                        "Pull finished with {} conflict(s)",
+                        run.conflicted_paths.len()
+                    ),
                     has_conflicts: true,
                     conflicted_paths: run.conflicted_paths,
                     error: Some(CoreError::new(

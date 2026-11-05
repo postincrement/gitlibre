@@ -31,7 +31,10 @@ pub const UNCOMMITTED_COMMIT_ID: &str = "__gitlibre_uncommitted__";
 
 /// List files changed by `commit`, or working-tree paths when `commit` is
 /// [`UNCOMMITTED_COMMIT_ID`].
-pub async fn list_commit_files(repo_path: &Path, commit: &str) -> CoreResult<Vec<CommitFileChange>> {
+pub async fn list_commit_files(
+    repo_path: &Path,
+    commit: &str,
+) -> CoreResult<Vec<CommitFileChange>> {
     if !repo_path.exists() {
         return Err(CoreError::path_not_found(repo_path.display()));
     }
@@ -175,16 +178,7 @@ pub async fn get_commit_file_diff_with_old_path(
     let commit = commit.to_string();
     let path = path.to_string();
     let old_path = old_path.map(str::to_string);
-    blocking(move || {
-        diff_file(
-            &repo_path,
-            &commit,
-            &path,
-            old_path.as_deref(),
-            area,
-        )
-    })
-    .await
+    blocking(move || diff_file(&repo_path, &commit, &path, old_path.as_deref(), area)).await
 }
 
 fn diff_file(
@@ -488,8 +482,9 @@ fn uncommitted_before(
     area: Option<ChangeArea>,
 ) -> Option<Vec<u8>> {
     match area {
-        Some(ChangeArea::Unstaged) => blob_at(repo, &format!(":{path}"))
-            .or_else(|| blob_at(repo, &format!("HEAD:{path}"))),
+        Some(ChangeArea::Unstaged) => {
+            blob_at(repo, &format!(":{path}")).or_else(|| blob_at(repo, &format!("HEAD:{path}")))
+        }
         Some(ChangeArea::Staged) | None => blob_at(repo, &format!("HEAD:{path}")),
         Some(ChangeArea::Untracked) => None,
     }
@@ -502,7 +497,9 @@ fn uncommitted_after(
     area: Option<ChangeArea>,
 ) -> Option<Vec<u8>> {
     match area {
-        Some(ChangeArea::Staged) => blob_at(repo, &format!(":{path}")).or_else(|| read_worktree(repo_path, path)),
+        Some(ChangeArea::Staged) => {
+            blob_at(repo, &format!(":{path}")).or_else(|| read_worktree(repo_path, path))
+        }
         Some(ChangeArea::Unstaged) | Some(ChangeArea::Untracked) | None => {
             read_worktree(repo_path, path)
         }
@@ -724,7 +721,9 @@ mod tests {
             .commit(Some("HEAD"), &sig, &sig, "second", &tree, &[&parent])
             .unwrap();
 
-        let files = list_commit_files(&repo_path, &oid.to_string()).await.unwrap();
+        let files = list_commit_files(&repo_path, &oid.to_string())
+            .await
+            .unwrap();
         assert!(files.iter().any(|f| f.path == "a.txt" && f.status == "M"));
         assert!(files.iter().any(|f| f.path == "b.txt" && f.status == "A"));
 

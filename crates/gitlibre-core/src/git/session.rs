@@ -23,9 +23,7 @@ where
 {
     match tokio::task::spawn_blocking(work).await {
         Ok(result) => result,
-        Err(err) => Err(CoreError::process_failed(format!(
-            "Git task failed: {err}"
-        ))),
+        Err(err) => Err(CoreError::process_failed(format!("Git task failed: {err}"))),
     }
 }
 

@@ -13,6 +13,7 @@ interface TopNavProps {
   onPushRepo: () => void;
   onFetchRepo: () => void;
   onFetchAll: () => void;
+  onStash: () => void;
   onRefreshView: () => void;
 }
 
@@ -29,6 +30,7 @@ export function TopNav({
   onPushRepo,
   onFetchRepo,
   onFetchAll,
+  onStash,
   onRefreshView,
 }: TopNavProps) {
   const title =
@@ -99,13 +101,6 @@ export function TopNav({
             icon={<IconArrowDown />}
           />
           <ToolbarIconButton
-            label="Refresh"
-            disabled={repoActionsDisabled}
-            title="Refresh the history or file list"
-            onClick={onRefreshView}
-            icon={<IconRefresh />}
-          />
-          <ToolbarIconButton
             label="Branch"
             disabled={repoActionsDisabled}
             icon={<IconBranch />}
@@ -118,7 +113,16 @@ export function TopNav({
           <ToolbarIconButton
             label="Stash"
             disabled={repoActionsDisabled}
+            title="Stash local changes"
+            onClick={onStash}
             icon={<IconStash />}
+          />
+          <ToolbarIconButton
+            label="Refresh"
+            disabled={repoActionsDisabled}
+            title="Refresh the history or file list"
+            onClick={onRefreshView}
+            icon={<IconRefresh />}
           />
         </nav>
       )}

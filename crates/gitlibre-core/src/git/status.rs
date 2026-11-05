@@ -1,6 +1,6 @@
 use crate::error::CoreResult;
-use crate::git::session::string_list;
 use crate::git::identity::read_commit_identity_at;
+use crate::git::session::string_list;
 use crate::git::session::{blocking, map_git2, open_repo};
 use serde::{Deserialize, Serialize};
 use std::path::Path;

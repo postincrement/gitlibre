@@ -129,6 +129,12 @@ export interface RepoStatus {
   commitIdentityIsLocal: boolean;
 }
 
+export interface StashEntry {
+  index: number;
+  message: string;
+  oid: string;
+}
+
 export interface BranchInfo {
   name: string;
   isCurrent: boolean;

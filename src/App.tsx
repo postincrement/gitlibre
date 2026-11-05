@@ -7,6 +7,7 @@ import { ConfirmModal, ProgressDialog } from "./components/Modal";
 import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
 import { RepoAccountDialog } from "./components/RepoAccountDialog";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { StashDialog } from "./components/StashDialog";
 import {
   loadSidebarWidth,
   SidebarResizeHandle,
@@ -84,6 +85,7 @@ export default function App() {
   } | null>(null);
   /** Bumped to reload the open history or file view. */
   const [viewGeneration, setViewGeneration] = useState(0);
+  const [showStash, setShowStash] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [showSplash, setShowSplash] = useState(true);
@@ -749,6 +751,7 @@ export default function App() {
         onPushRepo={handlePushOne}
         onFetchRepo={handleFetchOne}
         onFetchAll={handleFetchAll}
+        onStash={() => setShowStash(true)}
         onRefreshView={handleRefreshView}
       />
       {error && (
@@ -834,6 +837,16 @@ export default function App() {
             setDetectionRepoId(null);
             await refreshSnapshot();
             if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+          }}
+        />
+      )}
+      {showStash && selected && (
+        <StashDialog
+          repositoryId={selected.repositoryId}
+          onClose={() => setShowStash(false)}
+          onChanged={() => {
+            setViewGeneration((n) => n + 1);
+            if (windowWorkspaceId) void refreshStatuses(windowWorkspaceId);
           }}
         />
       )}
