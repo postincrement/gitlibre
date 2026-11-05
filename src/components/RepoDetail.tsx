@@ -173,7 +173,14 @@ export function RepoDetail({
     setSelectedCommit(null);
     setFiles([]);
     void loadInitial(status.repositoryId);
-  }, [status?.repositoryId, status?.available, status?.lastFetchSummary, loadInitial]);
+  }, [
+    status?.repositoryId,
+    status?.available,
+    status?.currentBranch,
+    status?.detachedHead,
+    status?.lastFetchSummary,
+    loadInitial,
+  ]);
 
   const statusFilesLoadKeyRef = useRef<string | null>(null);
 

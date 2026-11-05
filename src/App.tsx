@@ -102,6 +102,7 @@ export default function App() {
   const windowWorkspaceIdRef = useRef<WorkspaceId | null>(null);
   const selectedIdRef = useRef<RepositoryId | null>(null);
   const statusesRef = useRef<RepoStatus[]>([]);
+  const checkoutLock = useRef(false);
   statusesRef.current = statuses;
 
   useEffect(() => {
@@ -593,6 +594,24 @@ export default function App() {
     }
   }
 
+  async function handleCheckoutBranch(repoId: RepositoryId, branchName: string) {
+    if (busy || checkoutLock.current) return;
+    checkoutLock.current = true;
+    try {
+      setError(null);
+      setBusy(true);
+      setRemoteOp({ title: "Checkout", message: `Checking out ${branchName}…` });
+      await api.checkoutRepositoryRevision(repoId, branchName);
+      if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      checkoutLock.current = false;
+      setBusy(false);
+      setRemoteOp(null);
+    }
+  }
+
   async function handleSetRemoteAccount(
     repoId: RepositoryId,
     remote: string,
@@ -726,6 +745,7 @@ export default function App() {
           onRemoveRepository={(id) => setPendingRemoveId(id)}
           accounts={snapshot.accounts}
           onSetRemoteAccount={handleSetRemoteAccount}
+          onCheckoutBranch={handleCheckoutBranch}
         />
         <SidebarResizeHandle
           workspaceId={windowWorkspaceId}

@@ -48,6 +48,7 @@ interface RepoSidebarProps {
     remote: string,
     accountId: AccountId | null,
   ) => void | Promise<void>;
+  onCheckoutBranch: (repositoryId: RepositoryId, branchName: string) => void | Promise<void>;
 }
 
 interface ContextMenuState {
@@ -75,6 +76,7 @@ export function RepoSidebar({
   onRemoveRepository,
   accounts,
   onSetRemoteAccount,
+  onCheckoutBranch,
 }: RepoSidebarProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [remoteMenu, setRemoteMenu] = useState<{
@@ -297,7 +299,7 @@ export function RepoSidebar({
           >
             <div className="relative">
               <select
-                className="field-input w-full py-1 pr-10 text-[12px]"
+                className="repo-picker field-input w-full py-1 pr-8 text-[12px]"
                 value={selectedId ?? ""}
                 aria-label="Repository"
                 onChange={(e) => {
@@ -312,12 +314,18 @@ export function RepoSidebar({
                   </option>
                 ))}
               </select>
-              {selected?.available && selectedDirtyCount > 0 && (
-                <DirtyCountBadge
-                  count={selectedDirtyCount}
-                  className="pointer-events-none absolute right-6 top-1/2 z-[1] -translate-y-1/2"
-                />
-              )}
+              <span className="pointer-events-none absolute inset-y-0 left-2.5 right-7 flex items-center gap-1 text-[12px]">
+                <span className="min-w-0 truncate text-ink">
+                  {selected?.displayName}
+                </span>
+                {selected && <RepoBranchBadge repo={selected} />}
+                {selected?.available && selectedDirtyCount > 0 && (
+                  <DirtyCountBadge count={selectedDirtyCount} />
+                )}
+                {selected && !selected.available && (
+                  <span className="shrink-0 text-[10px] text-danger">missing</span>
+                )}
+              </span>
             </div>
           </div>
         ) : (
@@ -360,11 +368,12 @@ export function RepoSidebar({
                       <div className="flex items-center justify-between gap-1.5">
                         <div className="flex min-w-0 flex-1 items-center gap-1 pr-1">
                           <div
-                            className="truncate font-medium text-ink"
+                            className="min-w-0 truncate font-medium text-ink"
                             title={repoHoverTitle(repo)}
                           >
                             {repo.displayName}
                           </div>
+                          <RepoBranchBadge repo={repo} />
                           {repo.available && dirtyCount > 0 && (
                             <DirtyCountBadge count={dirtyCount} />
                           )}
@@ -423,14 +432,19 @@ export function RepoSidebar({
             <ul className="min-h-0 overflow-y-auto p-1.5">
               {branches.map((branch) => (
                 <li key={branch.name}>
-                  <div
+                  <button
+                    type="button"
                     className={[
-                      "mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1",
+                      "mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1 text-left",
                       branch.isCurrent
                         ? "bg-accent/20 font-medium text-ink ring-1 ring-accent/40"
-                        : "text-ink-muted",
+                        : "text-ink-muted hover:bg-surface-overlay hover:text-ink",
                     ].join(" ")}
                     title={branchDivergenceTitle(branch)}
+                    onDoubleClick={() => {
+                      if (!selected || busy || branch.isCurrent) return;
+                      void onCheckoutBranch(selected.repositoryId, branch.name);
+                    }}
                   >
                     <span
                       className={[
@@ -443,7 +457,7 @@ export function RepoSidebar({
                     </span>
                     <span className="min-w-0 flex-1 truncate">{branch.name}</span>
                     <BranchDivergence branch={branch} />
-                  </div>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -787,6 +801,33 @@ function dirtyFileCount(wt: WorkingTreeStatus): number {
   );
 }
 
+function RepoBranchBadge({
+  repo,
+  className,
+}: {
+  repo: RepoStatus;
+  className?: string;
+}) {
+  if (!repo.available || repo.detachedHead || !repo.currentBranch) return null;
+  return (
+    <span
+      className={[
+        "inline-flex max-w-[50%] shrink-0 items-center truncate rounded px-1 py-px text-[10px] font-medium leading-tight",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{
+        backgroundColor: "var(--status-branch)",
+        color: "var(--status-branch-fg)",
+      }}
+      title={repo.currentBranch}
+    >
+      {repo.currentBranch}
+    </span>
+  );
+}
+
 function repoHoverTitle(repo: RepoStatus): string {
   const branch = repo.detachedHead
     ? "detached HEAD"
@@ -877,6 +918,9 @@ function branchDivergenceTitle(branch: BranchInfo): string {
   }
   if (branch.ahead != null && branch.ahead > 0) {
     parts.push(`${branch.ahead} ahead of remote`);
+  }
+  if (!branch.isCurrent) {
+    parts.push("Double-click to check out");
   }
   return parts.join(" — ");
 }

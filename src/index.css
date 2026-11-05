@@ -218,6 +218,15 @@ html.dark .repo-toolbar-btn:not(:disabled):hover .repo-toolbar-glyph {
   border-color: var(--color-accent);
 }
 
+/* Closed select text is drawn by the overlay (name, then branch badge). */
+.repo-picker {
+  color: transparent;
+}
+
+.repo-picker option {
+  color: var(--color-ink);
+}
+
 .field-input.commit-message-compact {
   box-sizing: border-box;
   height: calc(1.25rem + 0.5rem + 2px);

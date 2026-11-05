@@ -155,6 +155,9 @@ fn list_remote_branches_at(repo_path: &Path, remote: &str) -> CoreResult<Vec<Str
 }
 
 /// Check out `revision` (commit, tag, or branch). May leave HEAD detached.
+///
+/// The checkout is safe: libgit2 refuses to overwrite uncommitted or untracked
+/// files that differ from the target. HEAD is left unchanged when that happens.
 pub async fn checkout_revision(repo_path: &Path, revision: &str) -> CoreResult<()> {
     validate_revision(revision)?;
     let path = repo_path.to_path_buf();
@@ -162,8 +165,26 @@ pub async fn checkout_revision(repo_path: &Path, revision: &str) -> CoreResult<(
     blocking(move || {
         let repo = open_repo(&path)?;
         let (object, reference) = repo.revparse_ext(&revision).map_err(map_git2)?;
-        repo.checkout_tree(&object, Some(git2::build::CheckoutBuilder::new().force()))
-            .map_err(map_git2)?;
+        let mut conflicts = Vec::new();
+        let checkout_result = {
+            let mut checkout = git2::build::CheckoutBuilder::new();
+            checkout.notify_on(
+                git2::CheckoutNotificationType::CONFLICT
+                    | git2::CheckoutNotificationType::UNTRACKED,
+            );
+            checkout.notify(|why, path, _, _, _| {
+                if why.is_conflict() || why.is_untracked() {
+                    if let Some(path) = path {
+                        conflicts.push(path.to_string_lossy().into_owned());
+                    }
+                }
+                true
+            });
+            repo.checkout_tree(&object, Some(&mut checkout))
+        };
+        if let Err(err) = checkout_result {
+            return Err(checkout_blocked(err, &conflicts));
+        }
         if let Some(reference) = reference.filter(|reference| reference.is_branch()) {
             let name = reference.name().map_err(map_git2)?;
             repo.set_head(name).map_err(map_git2)?;
@@ -173,6 +194,27 @@ pub async fn checkout_revision(repo_path: &Path, revision: &str) -> CoreResult<(
         Ok(())
     })
     .await
+}
+
+fn checkout_blocked(err: git2::Error, conflicts: &[String]) -> CoreError {
+    let blocked = err.code() == git2::ErrorCode::Conflict
+        || err.class() == git2::ErrorClass::Checkout
+        || !conflicts.is_empty();
+    if !blocked {
+        return map_git2(err);
+    }
+    let mut message = String::from(
+        "Cannot check out because local changes would be overwritten. Commit, stash, or discard them first.",
+    );
+    if !conflicts.is_empty() {
+        message.push(' ');
+        message.push_str(&conflicts.join(", "));
+        message.push('.');
+    } else if !err.message().is_empty() {
+        message.push(' ');
+        message.push_str(err.message());
+    }
+    CoreError::new(ErrorCode::ProcessFailed, message)
 }
 
 /// Create and check out a new branch at `revision`.
@@ -391,5 +433,99 @@ mod tests {
         let main = branches.iter().find(|b| b.name == "main").unwrap();
         assert_eq!(main.behind, Some(1));
         assert_eq!(main.ahead, Some(0));
+    }
+
+    fn force_checkout(repo: &git2::Repository, branch: &str) {
+        let refname = format!("refs/heads/{branch}");
+        let object = repo.revparse_single(&refname).unwrap();
+        repo.checkout_tree(&object, Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        repo.set_head(&refname).unwrap();
+    }
+
+    #[tokio::test]
+    async fn checkout_switches_branch_when_worktree_is_clean() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("repo");
+        fs::create_dir(&repo_path).unwrap();
+        let repo = testutil::init_repo(&repo_path);
+        testutil::commit_file(&repo, "f.txt", "main\n", "main");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("other", &head, false).unwrap();
+        force_checkout(&repo, "other");
+        testutil::commit_file(&repo, "f.txt", "other\n", "other");
+        force_checkout(&repo, "main");
+
+        checkout_revision(&repo_path, "other").await.unwrap();
+
+        let opened = git2::Repository::open(&repo_path).unwrap();
+        assert_eq!(opened.head().unwrap().shorthand().unwrap(), "other");
+        assert_eq!(fs::read_to_string(repo_path.join("f.txt")).unwrap(), "other\n");
+    }
+
+    #[tokio::test]
+    async fn checkout_refuses_to_overwrite_local_edits_and_untracked_files() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("repo");
+        fs::create_dir(&repo_path).unwrap();
+        let repo = testutil::init_repo(&repo_path);
+        testutil::commit_file(&repo, "f.txt", "main\n", "main");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("other", &head, false).unwrap();
+        force_checkout(&repo, "other");
+        testutil::commit_file(&repo, "f.txt", "other\n", "other");
+        testutil::commit_file(&repo, "extra.txt", "tracked\n", "add extra");
+        force_checkout(&repo, "main");
+
+        fs::write(repo_path.join("f.txt"), "dirty\n").unwrap();
+        let err = checkout_revision(&repo_path, "other").await.unwrap_err();
+        assert!(
+            err.message.contains("would be overwritten"),
+            "{err:?}"
+        );
+        assert!(err.message.contains("f.txt"), "{err:?}");
+        assert_eq!(fs::read_to_string(repo_path.join("f.txt")).unwrap(), "dirty\n");
+        let opened = git2::Repository::open(&repo_path).unwrap();
+        assert_eq!(opened.head().unwrap().shorthand().unwrap(), "main");
+
+        fs::write(repo_path.join("f.txt"), "main\n").unwrap();
+        fs::write(repo_path.join("extra.txt"), "local untracked\n").unwrap();
+        let err = checkout_revision(&repo_path, "other").await.unwrap_err();
+        assert!(err.message.contains("would be overwritten"), "{err:?}");
+        assert_eq!(
+            fs::read_to_string(repo_path.join("extra.txt")).unwrap(),
+            "local untracked\n"
+        );
+        let opened = git2::Repository::open(&repo_path).unwrap();
+        assert_eq!(opened.head().unwrap().shorthand().unwrap(), "main");
+    }
+
+    #[tokio::test]
+    async fn checkout_keeps_local_changes_that_are_not_overwritten() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().join("repo");
+        fs::create_dir(&repo_path).unwrap();
+        let repo = testutil::init_repo(&repo_path);
+        testutil::commit_file(&repo, "keep.txt", "same\n", "keep");
+        testutil::commit_file(&repo, "move.txt", "main\n", "move");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("other", &head, false).unwrap();
+        force_checkout(&repo, "other");
+        testutil::commit_file(&repo, "move.txt", "other\n", "move other");
+        force_checkout(&repo, "main");
+        fs::write(repo_path.join("keep.txt"), "local edit\n").unwrap();
+
+        checkout_revision(&repo_path, "other").await.unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo_path.join("keep.txt")).unwrap(),
+            "local edit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo_path.join("move.txt")).unwrap(),
+            "other\n"
+        );
+        let opened = git2::Repository::open(&repo_path).unwrap();
+        assert_eq!(opened.head().unwrap().shorthand().unwrap(), "other");
     }
 }
