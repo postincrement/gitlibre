@@ -65,6 +65,28 @@ export function Modal({
   );
 }
 
+interface ProgressDialogProps {
+  title: string;
+  message: string;
+}
+
+/** Blocks the window while a commit, fetch, pull, or push is running. */
+export function ProgressDialog({ title, message }: ProgressDialogProps) {
+  return (
+    <Modal title={title} dismissible={false} panelClassName="max-w-md">
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-0.5 h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-border border-t-accent"
+          aria-hidden
+        />
+        <p className="min-w-0 flex-1 break-words text-sm leading-snug text-ink" aria-live="polite">
+          {message}
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
 interface ConfirmModalProps {
   title: string;
   message: string;

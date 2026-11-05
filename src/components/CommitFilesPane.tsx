@@ -26,6 +26,7 @@ import {
   formatCommitTime,
   isUncommittedCommit,
 } from "../lib/commitGraphLayout";
+import { ProgressDialog } from "./Modal";
 import { isTagRef, TagBadge, tagDisplayName } from "./TagBadge";
 import {
   clampCommitInfoHeight,
@@ -153,6 +154,10 @@ export function CommitFilesPane({
   } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [commitProgress, setCommitProgress] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const [message, setMessage] = useState(
     () => loadCommitDraft(repositoryId).message,
   );
@@ -539,20 +544,34 @@ export function CommitFilesPane({
     e.preventDefault();
     if (!message.trim() && !amend) return;
     if (!amend && staged.length === 0) return;
-    await runMutation(
-      async () => {
-        await api.commitRepository(repositoryId, message, {
-          amend,
-          signOff,
-          signCommit,
-          noVerify,
-        });
-        if (pushImmediately) {
-          await api.pushRepository(repositoryId);
-        }
-      },
-      { committed: true },
-    );
+    setCommitProgress({
+      title: amend ? "Amend" : "Commit",
+      message: amend ? "Amending commit…" : "Committing…",
+    });
+    try {
+      await runMutation(
+        async () => {
+          await api.commitRepository(repositoryId, message, {
+            amend,
+            signOff,
+            signCommit,
+            noVerify,
+          });
+          if (pushImmediately) {
+            setCommitProgress({
+              title: "Push",
+              message: pushTargetLabel
+                ? `Pushing to ${pushTargetLabel}…`
+                : "Pushing…",
+            });
+            await api.pushRepository(repositoryId);
+          }
+        },
+        { committed: true },
+      );
+    } finally {
+      setCommitProgress(null);
+    }
   }
 
   const selectFile = useCallback(
@@ -709,6 +728,12 @@ export function CommitFilesPane({
       ref={paneRef}
       className="flex h-full min-h-0 flex-col bg-surface-raised/40"
     >
+      {commitProgress && (
+        <ProgressDialog
+          title={commitProgress.title}
+          message={commitProgress.message}
+        />
+      )}
       <div className="flex min-h-0 min-w-0 flex-1">
       <div
         className="flex min-h-0 shrink-0 flex-col border-r border-border"
@@ -1631,7 +1656,7 @@ function CommitForm({
             className="btn-primary"
             disabled={commitDisabled}
           >
-            {busy ? "Working…" : amend ? "Amend" : "Commit"}
+            {amend ? "Amend" : "Commit"}
           </button>
         </div>
       </div>
@@ -1645,7 +1670,7 @@ function CommitForm({
             className="btn-primary shrink-0 px-3 py-1 text-[12px]"
             disabled={commitDisabled}
           >
-            {busy ? "Working…" : amend ? "Amend" : "Commit"}
+            {amend ? "Amend" : "Commit"}
           </button>
         </>
       )}

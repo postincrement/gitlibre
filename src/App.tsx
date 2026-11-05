@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TopNav } from "./components/TopNav";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { RepoDetail } from "./components/RepoDetail";
-import { ConfirmModal } from "./components/Modal";
+import { ConfirmModal, ProgressDialog } from "./components/Modal";
 import { AccountsPanel, AddAccountForm } from "./components/AccountsPanel";
 import { RepoAccountDialog } from "./components/RepoAccountDialog";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -77,6 +77,10 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [contentView, setContentView] = useState<ContentViewMode>("history");
   const [busy, setBusy] = useState(false);
+  const [remoteOp, setRemoteOp] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [showSplash, setShowSplash] = useState(true);
@@ -96,6 +100,8 @@ export default function App() {
   const detectedForRepos = useRef(new Set<RepositoryId>());
   const windowWorkspaceIdRef = useRef<WorkspaceId | null>(null);
   const selectedIdRef = useRef<RepositoryId | null>(null);
+  const statusesRef = useRef<RepoStatus[]>([]);
+  statusesRef.current = statuses;
 
   useEffect(() => {
     windowWorkspaceIdRef.current = windowWorkspaceId;
@@ -299,6 +305,16 @@ export default function App() {
                 : s,
             ),
           );
+          const detail = event.message.trim();
+          if (!detail) return;
+          const name = statusesRef.current.find(
+            (s) => s.repositoryId === event.repositoryId,
+          )?.displayName;
+          setRemoteOp((current) =>
+            current
+              ? { ...current, message: name ? `${name}: ${detail}` : detail }
+              : current,
+          );
         }),
       );
       unlisteners.push(
@@ -331,6 +347,7 @@ export default function App() {
         await onWorkspaceFetchFinished(() => {
           if (cancelled) return;
           setBusy(false);
+          setRemoteOp(null);
           const id = windowWorkspaceIdRef.current;
           if (id) {
             void refreshStatuses(id);
@@ -506,9 +523,11 @@ export default function App() {
 
   async function handlePullOne() {
     if (!selectedId) return;
+    const name = selected?.displayName ?? "repository";
     try {
       setError(null);
       setBusy(true);
+      setRemoteOp({ title: "Pull", message: `Pulling ${name}…` });
       const result = await api.pullRepository(selectedId);
       if (result.hasConflicts) {
         const preview = result.conflictedPaths.slice(0, 5).join(", ");
@@ -526,19 +545,23 @@ export default function App() {
       setError(formatError(e));
     } finally {
       setBusy(false);
+      setRemoteOp(null);
     }
   }
 
   async function handleFetchOne() {
     if (!selectedId) return;
+    const name = selected?.displayName ?? "repository";
     try {
       setError(null);
       setBusy(true);
+      setRemoteOp({ title: "Fetch", message: `Fetching ${name}…` });
       await api.fetchRepository(selectedId);
     } catch (e) {
       setError(formatError(e));
     } finally {
       setBusy(false);
+      setRemoteOp(null);
     }
   }
 
@@ -547,10 +570,13 @@ export default function App() {
     try {
       setError(null);
       setBusy(true);
+      setRemoteOp({ title: "Fetch all", message: "Fetching repositories…" });
       await api.fetchWorkspace(windowWorkspaceId);
     } catch (e) {
       setError(formatError(e));
+    } finally {
       setBusy(false);
+      setRemoteOp(null);
     }
   }
 
@@ -727,6 +753,9 @@ export default function App() {
             if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
           }}
         />
+      )}
+      {remoteOp && (
+        <ProgressDialog title={remoteOp.title} message={remoteOp.message} />
       )}
       {pendingRemoveId && (
         <ConfirmModal

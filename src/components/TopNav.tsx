@@ -80,7 +80,7 @@ export function TopNav({
             icon={<IconArrowUp />}
           />
           <ToolbarIconButton
-            label={repoFetching ? "Fetching…" : "Fetch"}
+            label="Fetch"
             disabled={syncDisabled}
             title={
               repoHasAccount
@@ -116,7 +116,7 @@ export function TopNav({
           disabled={!workspaceName || busy}
           className="btn-secondary"
         >
-          {busy && !repoFetching ? "Fetching…" : "Fetch all"}
+          Fetch all
         </button>
       </div>
     </header>
