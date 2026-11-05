@@ -16,11 +16,17 @@ export interface Workspace {
   repositoryIds: RepositoryId[];
 }
 
+export interface RemoteAccount {
+  remote: string;
+  accountId: AccountId | null;
+}
+
 export interface Repository {
   id: RepositoryId;
   path: string;
   displayName: string;
   accountId: AccountId | null;
+  remoteAccounts: RemoteAccount[];
 }
 
 export interface Account {
@@ -117,6 +123,7 @@ export interface RepoStatus {
   lastError: string | null;
   lastFetchSummary: string | null;
   accountId: AccountId | null;
+  remoteAccounts: RemoteAccount[];
   commitName: string | null;
   commitEmail: string | null;
   commitIdentityIsLocal: boolean;

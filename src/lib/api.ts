@@ -29,6 +29,13 @@ export async function createWorkspace(name: string): Promise<Workspace> {
   return invoke<Workspace>("create_workspace", { name });
 }
 
+export async function renameWorkspace(
+  id: WorkspaceId,
+  name: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>("rename_workspace", { id, name });
+}
+
 export async function deleteWorkspace(id: WorkspaceId): Promise<AppSnapshot> {
   return invoke<AppSnapshot>("delete_workspace", { id });
 }
@@ -83,6 +90,18 @@ export async function setRepositoryAccount(
 ): Promise<Repository> {
   return invoke<Repository>("set_repository_account", {
     repositoryId,
+    accountId,
+  });
+}
+
+export async function setRemoteAccount(
+  repositoryId: RepositoryId,
+  remote: string,
+  accountId: AccountId | null,
+): Promise<Repository> {
+  return invoke<Repository>("set_remote_account", {
+    repositoryId,
+    remote,
     accountId,
   });
 }

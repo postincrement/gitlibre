@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  Account,
+  AccountId,
   BranchInfo,
   RepositoryId,
   RepoStatus,
@@ -14,7 +16,9 @@ import type {
   WorkspaceId,
 } from "../types/models";
 import * as api from "../lib/api";
+import { accountIdForRemote } from "../lib/remoteAccount";
 import type { ContentViewMode } from "../lib/contentView";
+import { Modal } from "./Modal";
 import {
   clampRepoListHeight,
   loadRepoListHeight,
@@ -38,6 +42,12 @@ interface RepoSidebarProps {
   onAddRepository: () => void;
   onManageAccounts: (id: RepositoryId) => void;
   onRemoveRepository: (id: RepositoryId) => void;
+  accounts: Account[];
+  onSetRemoteAccount: (
+    repositoryId: RepositoryId,
+    remote: string,
+    accountId: AccountId | null,
+  ) => void | Promise<void>;
 }
 
 interface ContextMenuState {
@@ -63,8 +73,16 @@ export function RepoSidebar({
   onAddRepository,
   onManageAccounts,
   onRemoveRepository,
+  accounts,
+  onSetRemoteAccount,
 }: RepoSidebarProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [remoteMenu, setRemoteMenu] = useState<{
+    name: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [editingRemote, setEditingRemote] = useState<string | null>(null);
   const [expandedRemote, setExpandedRemote] = useState<string | null>(null);
   const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
   const [remoteBranchesLoading, setRemoteBranchesLoading] = useState(false);
@@ -449,23 +467,46 @@ export function RepoSidebar({
                 .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
                 .map((remote) => {
                   const open = expandedRemote === remote.name;
+                  const remoteAccountId = accountIdForRemote(selected, remote.name);
+                  const remoteAccount = accounts.find(
+                    (account) => account.id === remoteAccountId,
+                  );
+                  const accountLabel = remoteAccount?.displayName ?? "No account";
                   return (
                     <li key={remote.name}>
                       <button
                         type="button"
                         className={[
-                          "mb-0.5 flex w-full items-center gap-1 truncate rounded px-2 py-1 text-left transition",
+                          "mb-0.5 flex w-full items-center gap-1 rounded px-2 py-1 text-left transition",
                           open
                             ? "bg-accent/15 font-medium text-ink ring-1 ring-accent/40"
                             : "text-ink hover:bg-surface-overlay",
                         ].join(" ")}
-                        title={`${remote.name}\nfetch: ${remote.fetchUrl}\npush: ${remote.pushUrl}`}
+                        title={`${remote.name}\n${accountLabel}\nfetch: ${remote.fetchUrl}\npush: ${remote.pushUrl}`}
                         onClick={() => void toggleRemote(remote.name)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setMenu(null);
+                          setRemoteMenu({
+                            name: remote.name,
+                            x: e.clientX,
+                            y: e.clientY,
+                          });
+                        }}
                       >
                         <span className="w-2 shrink-0 text-[10px] text-ink-muted" aria-hidden>
                           {open ? "▼" : "▶"}
                         </span>
-                        <span className="truncate">{remote.name}</span>
+                        <span className="min-w-0 flex-1 truncate">{remote.name}</span>
+                        <span
+                          className={[
+                            "max-w-[48%] shrink-0 truncate text-[10px] font-normal",
+                            remoteAccount ? "text-ink-muted" : "text-danger",
+                          ].join(" ")}
+                        >
+                          {accountLabel}
+                        </span>
                       </button>
                       {open && (
                         <div className="mb-1 ml-2 border-l border-border pl-1.5">
@@ -493,6 +534,34 @@ export function RepoSidebar({
         </div>
       </div>
 
+      {remoteMenu && selected && (
+        <RemoteContextMenu
+          x={remoteMenu.x}
+          y={remoteMenu.y}
+          remoteName={remoteMenu.name}
+          onClose={() => setRemoteMenu(null)}
+          onEditAccount={() => {
+            setEditingRemote(remoteMenu.name);
+            setRemoteMenu(null);
+          }}
+        />
+      )}
+      {editingRemote && selected && (
+        <RemoteAccountDialog
+          remoteName={editingRemote}
+          fetchUrl={
+            selected.remotes.find((remote) => remote.name === editingRemote)
+              ?.fetchUrl ?? ""
+          }
+          accountId={accountIdForRemote(selected, editingRemote)}
+          accounts={accounts}
+          busy={busy}
+          onAssign={(accountId) =>
+            onSetRemoteAccount(selected.repositoryId, editingRemote, accountId)
+          }
+          onClose={() => setEditingRemote(null)}
+        />
+      )}
       {menu && (
         <RepoContextMenu
           x={menu.x}
@@ -844,6 +913,131 @@ function BranchDivergence({ branch }: { branch: BranchInfo }) {
         </span>
       )}
     </span>
+  );
+}
+
+function RemoteContextMenu({
+  x,
+  y,
+  remoteName,
+  onClose,
+  onEditAccount,
+}: {
+  x: number;
+  y: number;
+  remoteName: string;
+  onClose: () => void;
+  onEditAccount: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - rect.width - pad);
+    }
+    if (top + rect.height > window.innerHeight - pad) {
+      top = Math.max(pad, window.innerHeight - rect.height - pad);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [x, y]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`${remoteName} actions`}
+      className="fixed z-50 min-w-44 rounded-md border border-border bg-surface-raised py-1 text-[12px] shadow-xl shadow-black/40"
+      style={{ left: x, top: y }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        className="block w-full px-2.5 py-1 text-left text-ink hover:bg-surface-overlay"
+        onClick={onEditAccount}
+      >
+        Edit account…
+      </button>
+    </div>
+  );
+}
+
+function RemoteAccountDialog({
+  remoteName,
+  fetchUrl,
+  accountId,
+  accounts,
+  busy,
+  onAssign,
+  onClose,
+}: {
+  remoteName: string;
+  fetchUrl: string;
+  accountId: AccountId | null;
+  accounts: Account[];
+  busy?: boolean;
+  onAssign: (accountId: AccountId | null) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={`Account — ${remoteName}`} onClose={onClose}>
+      <p className="mb-3 text-sm text-ink-muted">
+        Choose the account this remote uses for fetch, pull, and push.
+      </p>
+      {fetchUrl && (
+        <p className="mb-3 truncate font-mono text-[11px] text-ink-muted" title={fetchUrl}>
+          {fetchUrl}
+        </p>
+      )}
+      <label className="mb-1 block text-sm text-ink-muted" htmlFor="remote-account">
+        Authentication account
+      </label>
+      <select
+        id="remote-account"
+        className="field-input mb-3"
+        value={accountId ?? ""}
+        disabled={busy}
+        onChange={(e) => void onAssign(e.target.value || null)}
+      >
+        <option value="">No account</option>
+        {accounts.map((account) => (
+          <option key={account.id} value={account.id}>
+            {account.displayName} ({account.provider}/{account.username})
+          </option>
+        ))}
+      </select>
+      {accounts.length === 0 && (
+        <p className="mb-3 text-sm text-ink-muted">
+          Create an account from the Accounts menu, then assign it here.
+        </p>
+      )}
+      <div className="flex justify-end">
+        <button type="button" className="btn-primary" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Modal>
   );
 }
 

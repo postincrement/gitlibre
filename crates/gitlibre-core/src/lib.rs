@@ -17,7 +17,7 @@ pub mod store;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use auth::GitAuth;
+pub use auth::{GitAuth, RemoteAuthSet};
 pub use detect::{
     detect_repo_account, detect_repo_account_from_remote, parse_remote_url, DetectedRepoAccount,
     ParsedRemoteUrl,
@@ -37,7 +37,8 @@ pub use git::{
 };
 pub use ids::{AccountId, RepositoryId, WorkspaceId};
 pub use models::{
-    Account, AppConfig, AuthKind, HostingProvider, Repository, Workspace, CONFIG_VERSION,
+    Account, AppConfig, AuthKind, HostingProvider, RemoteAccount, Repository, Workspace,
+    CONFIG_VERSION,
 };
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore};
 pub use ssh_config::{resolve_alias, ResolvedSshHost, SshConfigFile};

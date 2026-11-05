@@ -38,14 +38,41 @@ pub struct Workspace {
     pub repositories: Vec<RepositoryId>,
 }
 
+/// Account bound to one named remote.
+///
+/// `account_id: None` is an explicit "no account" and does not inherit the
+/// repository account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAccount {
+    pub remote: String,
+    pub account_id: Option<AccountId>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Repository {
     pub id: RepositoryId,
     pub path: PathBuf,
     pub display_name: String,
-    /// Authentication identity for remote Git operations (not commit author).
+    /// Fallback authentication identity when a remote has no explicit binding.
+    /// Commit author identity is configured on the account, not here.
     #[serde(default)]
     pub account_id: Option<AccountId>,
+    /// Per-remote account bindings. Remotes absent from this list inherit
+    /// [`Self::account_id`].
+    #[serde(default)]
+    pub remote_accounts: Vec<RemoteAccount>,
+}
+
+impl Repository {
+    /// Account that authenticates `remote`. An explicit binding wins, including
+    /// an explicit unassignment.
+    pub fn account_for_remote(&self, remote: &str) -> Option<AccountId> {
+        if let Some(binding) = self.remote_accounts.iter().find(|b| b.remote == remote) {
+            return binding.account_id;
+        }
+        self.account_id
+    }
 }
 
 /// Hosting provider. Architecture is provider-independent; GitHub is first.

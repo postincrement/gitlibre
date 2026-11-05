@@ -5,7 +5,7 @@
 //! OpenSSH agent) belong in [`supply_cred`] and must not launch an external
 //! `ssh`, `plink`, or `git` program.
 
-use crate::auth::GitAuth;
+use crate::auth::{GitAuth, RemoteAuthSet};
 use crate::error::{CoreError, CoreResult, ErrorCode};
 use crate::git::session::{map_git2, open_repo, string_list};
 use crate::ssh_config::{default_ssh_config_path, SshConfigFile};
@@ -143,10 +143,11 @@ pub struct FetchRun {
     pub summary: String,
 }
 
-/// Fetch every configured remote. SSH without an account key fails before connecting.
+/// Fetch every configured remote. Each remote uses its own account.
+/// SSH without an account key fails before connecting.
 pub fn fetch_all(
     repo_path: &Path,
-    auth: Option<&GitAuth>,
+    auth: &RemoteAuthSet,
     mut on_progress: impl FnMut(String),
 ) -> CoreResult<FetchRun> {
     let repo = open_repo(repo_path)?;
@@ -160,7 +161,13 @@ pub fn fetch_all(
     let config = load_ssh_config();
     let mut last = String::new();
     for name in &names {
-        let summary = fetch_named(&repo, name, auth, config.as_ref(), &mut on_progress)?;
+        let summary = fetch_named(
+            &repo,
+            name,
+            auth.for_remote(name),
+            config.as_ref(),
+            &mut on_progress,
+        )?;
         if !summary.is_empty() {
             last = summary;
         }
@@ -190,7 +197,7 @@ fn fetch_named(
     let original_url = named.url().unwrap_or("").to_string();
     let specs = string_list(&named.fetch_refspecs().map_err(map_git2)?);
     let prepared = prepare_remote_url(&original_url, config);
-    require_auth_for_url(&prepared, auth)?;
+    require_auth_for_url(&prepared, auth).map_err(|err| named_auth_error(name, err))?;
     let ssh = ssh_inputs(auth, &original_url, config);
     let spec_refs: Vec<&str> = specs.iter().map(String::as_str).collect();
     let messages = Rc::new(RefCell::new(Vec::new()));
@@ -222,10 +229,14 @@ fn require_auth_for_url(prepared: &PreparedUrl, auth: Option<&GitAuth>) -> CoreR
     if prepared.is_ssh && !matches!(auth, Some(GitAuth::SshKey { .. })) {
         return Err(CoreError::new(
             ErrorCode::AuthenticationFailed,
-            "Authentication failed. Assign an SSH account in GitLibre and retry.",
+            "Authentication failed. Assign an account to this remote and retry.",
         ));
     }
     Ok(())
+}
+
+fn named_auth_error(remote: &str, err: CoreError) -> CoreError {
+    CoreError::new(err.code, format!("{remote}: {}", err.message))
 }
 
 /// Build the libgit2 credential callback.
@@ -321,7 +332,7 @@ fn supply_cred(
     }
 }
 
-pub fn push_current_branch(repo_path: &Path, auth: Option<&GitAuth>) -> CoreResult<String> {
+pub fn push_current_branch(repo_path: &Path, auth_set: &RemoteAuthSet) -> CoreResult<String> {
     let repo = open_repo(repo_path)?;
     let head = repo.head().map_err(map_git2)?;
     if !head.is_branch() {
@@ -348,11 +359,13 @@ pub fn push_current_branch(repo_path: &Path, auth: Option<&GitAuth>) -> CoreResu
                 })
         })
         .unwrap_or_else(|| "origin".to_string());
+    let auth = auth_set.for_remote(&remote_name);
     let named = repo.find_remote(&remote_name).map_err(map_git2)?;
     let original_url = named.url().unwrap_or("").to_string();
     let config = load_ssh_config();
     let prepared = prepare_remote_url(&original_url, config.as_ref());
-    require_auth_for_url(&prepared, auth)?;
+    require_auth_for_url(&prepared, auth)
+        .map_err(|err| named_auth_error(&remote_name, err))?;
     let ssh = ssh_inputs(auth, &original_url, config.as_ref());
     let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
     let callbacks = remote_callbacks(auth, &prepared, ssh.as_ref(), |_| {});
@@ -386,7 +399,7 @@ pub struct PullRun {
 
 pub fn pull_current_branch(
     repo_path: &Path,
-    auth: Option<&GitAuth>,
+    auth_set: &RemoteAuthSet,
     on_progress: impl FnMut(String),
 ) -> CoreResult<PullRun> {
     let repo = open_repo(repo_path)?;
@@ -420,7 +433,7 @@ pub fn pull_current_branch(
     fetch_named(
         &repo,
         &remote_name,
-        auth,
+        auth_set.for_remote(&remote_name),
         load_ssh_config().as_ref(),
         &mut on_progress,
     )?;

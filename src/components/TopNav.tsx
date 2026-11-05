@@ -1,4 +1,4 @@
-import type { ReactNode, SVGProps } from "react";
+import { useEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
 
 interface TopNavProps {
   workspaceName: string | null;
@@ -7,6 +7,7 @@ interface TopNavProps {
   repoHasAccount: boolean;
   repoFetching: boolean;
   busy: boolean;
+  onRenameWorkspace: (name: string) => Promise<void>;
   onCommit: () => void;
   onPullRepo: () => void;
   onFetchRepo: () => void;
@@ -20,6 +21,7 @@ export function TopNav({
   repoHasAccount,
   repoFetching,
   busy,
+  onRenameWorkspace,
   onCommit,
   onPullRepo,
   onFetchRepo,
@@ -37,16 +39,16 @@ export function TopNav({
     <header className="flex h-[4.25rem] shrink-0 items-center gap-3 border-b border-border bg-surface-raised/90 px-4 backdrop-blur">
       {workspaceName && (
         <div
-          className="min-w-0 max-w-[28%] truncate text-lg font-semibold tracking-tight text-ink"
+          className="flex min-w-0 max-w-[28%] items-baseline text-lg font-semibold tracking-tight text-ink"
           title={title}
         >
-          <span>{workspaceName}</span>
+          <WorkspaceName name={workspaceName} onRename={onRenameWorkspace} />
           {repoName && (
             <>
-              <span className="mx-1.5 font-normal text-ink-muted" aria-hidden>
+              <span className="mx-1.5 shrink-0 font-normal text-ink-muted" aria-hidden>
                 /
               </span>
-              <span className="font-medium">{repoName}</span>
+              <span className="min-w-0 truncate font-medium">{repoName}</span>
             </>
           )}
         </div>
@@ -75,7 +77,7 @@ export function TopNav({
             title={
               repoHasAccount
                 ? undefined
-                : "Assign an account to push this repository"
+                : "Assign an account to a remote to push"
             }
             icon={<IconArrowUp />}
           />
@@ -85,7 +87,7 @@ export function TopNav({
             title={
               repoHasAccount
                 ? undefined
-                : "Assign an account to fetch this repository"
+                : "Assign an account to a remote to fetch"
             }
             dashed
             onClick={onFetchRepo}
@@ -120,6 +122,97 @@ export function TopNav({
         </button>
       </div>
     </header>
+  );
+}
+
+function WorkspaceName({
+  name,
+  onRename,
+}: {
+  name: string;
+  onRename: (name: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
+  const savingRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(name);
+  }, [name, editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  function cancel() {
+    cancelRef.current = true;
+    setDraft(name);
+    setEditing(false);
+  }
+
+  async function commit() {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      return;
+    }
+    if (savingRef.current) return;
+    const next = draft.trim();
+    if (!next || next === name) {
+      setDraft(name);
+      setEditing(false);
+      return;
+    }
+    savingRef.current = true;
+    try {
+      await onRename(next);
+      setEditing(false);
+    } catch {
+      inputRef.current?.focus();
+    } finally {
+      savingRef.current = false;
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        aria-label="Workspace name"
+        className="min-w-0 max-w-full border-b border-accent bg-transparent text-lg font-semibold tracking-tight text-ink outline-none"
+        style={{ width: `${Math.max(draft.length, name.length, 1)}ch` }}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="min-w-0 truncate text-left hover:underline hover:decoration-ink-muted/70 hover:underline-offset-4"
+      title="Rename workspace"
+      onClick={() => {
+        cancelRef.current = false;
+        setDraft(name);
+        setEditing(true);
+      }}
+    >
+      {name}
+    </button>
   );
 }
 

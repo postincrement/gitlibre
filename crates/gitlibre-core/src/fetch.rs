@@ -1,4 +1,4 @@
-use crate::auth::GitAuth;
+use crate::auth::RemoteAuthSet;
 use crate::error::{CoreError, ErrorCode};
 use crate::git::transport;
 use crate::ids::RepositoryId;
@@ -93,7 +93,12 @@ impl FetchCoordinator {
     where
         F: FnMut(FetchProgress) + Send,
     {
-        self.fetch_one_with_auth(repository_id, repo_path, None, on_progress)
+        self.fetch_one_with_auth(
+            repository_id,
+            repo_path,
+            RemoteAuthSet::default(),
+            on_progress,
+        )
             .await
     }
 
@@ -101,7 +106,7 @@ impl FetchCoordinator {
         &self,
         repository_id: RepositoryId,
         repo_path: &Path,
-        auth: Option<GitAuth>,
+        auth: RemoteAuthSet,
         mut on_progress: F,
     ) -> FetchOutcome
     where
@@ -133,9 +138,9 @@ impl FetchCoordinator {
         let progress_id = repository_id;
         let path = repo_path.to_path_buf();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let fetch_auth = auth.clone();
+        let fetch_auth = auth;
         let handle = tokio::task::spawn_blocking(move || {
-            transport::fetch_all(&path, fetch_auth.as_ref(), |message| {
+            transport::fetch_all(&path, &fetch_auth, |message| {
                 let _ = tx.send(message);
             })
         });
@@ -188,7 +193,7 @@ impl FetchCoordinator {
         self.fetch_many_with_auth(
             repos
                 .into_iter()
-                .map(|(id, path)| (id, path, None))
+                .map(|(id, path)| (id, path, RemoteAuthSet::default()))
                 .collect(),
             on_progress,
         )
@@ -197,7 +202,7 @@ impl FetchCoordinator {
 
     pub async fn fetch_many_with_auth<F>(
         &self,
-        repos: Vec<(RepositoryId, PathBuf, Option<GitAuth>)>,
+        repos: Vec<(RepositoryId, PathBuf, RemoteAuthSet)>,
         on_progress: F,
     ) -> WorkspaceFetchSummary
     where

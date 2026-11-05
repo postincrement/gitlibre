@@ -35,6 +35,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::create_workspace,
+            commands::rename_workspace,
             commands::delete_workspace,
             commands::set_active_workspace,
             commands::open_workspace_window,
@@ -45,6 +46,7 @@ pub fn run() {
             commands::update_account,
             commands::delete_account,
             commands::set_repository_account,
+            commands::set_remote_account,
             commands::pick_directory,
             commands::pick_file,
             commands::pick_ssh_key,

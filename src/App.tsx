@@ -14,6 +14,7 @@ import {
 import { WorkspaceOpenModal } from "./components/WorkspaceOpenModal";
 import * as api from "./lib/api";
 import { formatError } from "./lib/formatError";
+import { repositoryCanSync } from "./lib/remoteAccount";
 import {
   onMenuAccounts,
   onMenuNewWorkspace,
@@ -435,6 +436,18 @@ export default function App() {
       });
   }, [windowWorkspace, selected]);
 
+  async function handleRenameWorkspace(name: string) {
+    if (!windowWorkspaceId) return;
+    setError(null);
+    try {
+      const snap = await api.renameWorkspace(windowWorkspaceId, name);
+      setSnapshot(snap);
+    } catch (e) {
+      setError(formatError(e));
+      throw e;
+    }
+  }
+
   async function handleCreateWorkspace(name: string) {
     setError(null);
     try {
@@ -580,6 +593,21 @@ export default function App() {
     }
   }
 
+  async function handleSetRemoteAccount(
+    repoId: RepositoryId,
+    remote: string,
+    accountId: AccountId | null,
+  ) {
+    try {
+      setError(null);
+      await api.setRemoteAccount(repoId, remote, accountId);
+      await refreshSnapshot();
+      if (windowWorkspaceId) await refreshStatuses(windowWorkspaceId);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  }
+
   async function handleAssignAccount(
     repoId: RepositoryId,
     accountId: AccountId | null,
@@ -665,9 +693,10 @@ export default function App() {
         workspaceName={windowWorkspace?.name ?? null}
         repoName={selected?.displayName ?? null}
         canFetchRepo={Boolean(selected?.available)}
-        repoHasAccount={Boolean(selected?.accountId)}
+        repoHasAccount={selected ? repositoryCanSync(selected) : false}
         repoFetching={Boolean(selected?.isFetching)}
         busy={busy}
+        onRenameWorkspace={handleRenameWorkspace}
         onCommit={() => handleContentViewChange("fileStatus")}
         onPullRepo={handlePullOne}
         onFetchRepo={handleFetchOne}
@@ -695,6 +724,8 @@ export default function App() {
           onAddRepository={handleAddRepository}
           onManageAccounts={(id) => setAccountsRepoId(id)}
           onRemoveRepository={(id) => setPendingRemoveId(id)}
+          accounts={snapshot.accounts}
+          onSetRemoteAccount={handleSetRemoteAccount}
         />
         <SidebarResizeHandle
           workspaceId={windowWorkspaceId}

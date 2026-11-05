@@ -394,12 +394,11 @@ pub async fn read_head_commit_message(repo_path: &Path) -> CoreResult<String> {
 /// Push the current branch to its upstream, or to `origin` when none is set.
 pub async fn push_current_branch(
     repo_path: &Path,
-    auth: Option<&crate::auth::GitAuth>,
+    auth: crate::auth::RemoteAuthSet,
 ) -> CoreResult<String> {
     validate_repo(repo_path)?;
     let path = repo_path.to_path_buf();
-    let auth = auth.cloned();
-    blocking(move || crate::git::transport::push_current_branch(&path, auth.as_ref())).await
+    blocking(move || crate::git::transport::push_current_branch(&path, &auth)).await
 }
 
 fn restore_from_head(

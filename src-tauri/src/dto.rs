@@ -1,6 +1,6 @@
 use gitlibre_core::{
-    Account, AccountId, AuthKind, CoreError, DetectedRepoAccount, HostingProvider, RemoteInfo,
-    Repository, RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
+    Account, AccountId, AuthKind, CoreError, DetectedRepoAccount, HostingProvider, RemoteAccount,
+    RemoteInfo, Repository, RepositoryId, WorkingTreeStatus, Workspace, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -51,6 +51,7 @@ pub struct RepositoryDto {
     pub path: PathBuf,
     pub display_name: String,
     pub account_id: Option<AccountId>,
+    pub remote_accounts: Vec<RemoteAccount>,
 }
 
 impl From<Repository> for RepositoryDto {
@@ -60,6 +61,7 @@ impl From<Repository> for RepositoryDto {
             path: r.path,
             display_name: r.display_name,
             account_id: r.account_id,
+            remote_accounts: r.remote_accounts,
         }
     }
 }
@@ -195,6 +197,7 @@ pub struct RepoStatusDto {
     pub last_error: Option<String>,
     pub last_fetch_summary: Option<String>,
     pub account_id: Option<AccountId>,
+    pub remote_accounts: Vec<RemoteAccount>,
     /// Effective `user.name` for this repo (local preferred over global).
     pub commit_name: Option<String>,
     /// Effective `user.email` for this repo (local preferred over global).

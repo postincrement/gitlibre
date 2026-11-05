@@ -1,4 +1,4 @@
-use crate::auth::GitAuth;
+use crate::auth::RemoteAuthSet;
 use crate::error::{CoreError, ErrorCode};
 use crate::fetch::FetchCoordinator;
 use crate::git::session::blocking;
@@ -23,7 +23,7 @@ impl FetchCoordinator {
         &self,
         repository_id: RepositoryId,
         repo_path: &Path,
-        auth: Option<GitAuth>,
+        auth: RemoteAuthSet,
         mut on_progress: F,
     ) -> PullOutcome
     where
@@ -44,9 +44,9 @@ impl FetchCoordinator {
             let progress_id = repository_id;
             let path = repo_path.to_path_buf();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let pull_auth = auth.clone();
+            let pull_auth = auth;
             let handle = tokio::task::spawn_blocking(move || {
-                transport::pull_current_branch(&path, pull_auth.as_ref(), |message| {
+                transport::pull_current_branch(&path, &pull_auth, |message| {
                     let _ = tx.send(message);
                 })
             });
@@ -104,6 +104,7 @@ pub async fn list_conflicted_paths(repo_path: &Path) -> Result<Vec<String>, Core
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::RemoteAuthSet;
     use crate::fetch::FetchCoordinator;
     use crate::testutil;
     use std::fs;
@@ -130,7 +131,12 @@ mod tests {
 
         let coordinator = FetchCoordinator::new();
         let outcome = coordinator
-            .pull_one_with_auth(RepositoryId::new(), &local_path, None, |_| {})
+            .pull_one_with_auth(
+                RepositoryId::new(),
+                &local_path,
+                RemoteAuthSet::default(),
+                |_| {},
+            )
             .await;
         assert!(outcome.success, "{outcome:?}");
         assert!(!outcome.has_conflicts);
@@ -161,7 +167,12 @@ mod tests {
 
         let coordinator = FetchCoordinator::new();
         let outcome = coordinator
-            .pull_one_with_auth(RepositoryId::new(), &local_path, None, |_| {})
+            .pull_one_with_auth(
+                RepositoryId::new(),
+                &local_path,
+                RemoteAuthSet::default(),
+                |_| {},
+            )
             .await;
         assert!(outcome.has_conflicts, "{outcome:?}");
         assert!(

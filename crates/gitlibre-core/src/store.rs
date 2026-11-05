@@ -1,6 +1,8 @@
 use crate::error::{CoreError, CoreResult, ErrorCode};
 use crate::ids::{AccountId, RepositoryId, WorkspaceId};
-use crate::models::{migrate_config, Account, AppConfig, AuthKind, Repository, Workspace};
+use crate::models::{
+    migrate_config, Account, AppConfig, AuthKind, RemoteAccount, Repository, Workspace,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -76,6 +78,31 @@ impl ConfigStore {
         }
         self.save()?;
         Ok(workspace)
+    }
+
+    pub fn rename_workspace(
+        &mut self,
+        id: WorkspaceId,
+        name: impl Into<String>,
+    ) -> CoreResult<Workspace> {
+        let name = name.into();
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CoreError::new(
+                ErrorCode::Internal,
+                "Workspace name must not be empty.",
+            ));
+        }
+        let workspace = self
+            .config
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == id)
+            .ok_or_else(CoreError::workspace_not_found)?;
+        workspace.name = name.to_string();
+        let updated = workspace.clone();
+        self.save()?;
+        Ok(updated)
     }
 
     pub fn delete_workspace(&mut self, id: WorkspaceId) -> CoreResult<()> {
@@ -201,6 +228,7 @@ impl ConfigStore {
                 path: canonical,
                 display_name,
                 account_id: None,
+                remote_accounts: Vec::new(),
             };
             let ws = self
                 .config
@@ -309,6 +337,11 @@ impl ConfigStore {
             if repo.account_id == Some(id) {
                 repo.account_id = None;
             }
+            for binding in &mut repo.remote_accounts {
+                if binding.account_id == Some(id) {
+                    binding.account_id = None;
+                }
+            }
         }
         self.save()?;
         Ok(())
@@ -331,6 +364,46 @@ impl ConfigStore {
             .find(|r| r.id == repo_id)
             .ok_or_else(CoreError::repository_not_found)?;
         repo.account_id = account_id;
+        let cloned = repo.clone();
+        self.save()?;
+        Ok(cloned)
+    }
+
+    /// Bind `account_id` to one remote. `None` is an explicit unassignment and
+    /// does not inherit the repository account.
+    pub fn set_remote_account(
+        &mut self,
+        repo_id: RepositoryId,
+        remote: impl Into<String>,
+        account_id: Option<AccountId>,
+    ) -> CoreResult<Repository> {
+        let remote = remote.into();
+        let remote = remote.trim();
+        if remote.is_empty() {
+            return Err(CoreError::new(
+                ErrorCode::Internal,
+                "Remote name must not be empty.",
+            ));
+        }
+        if let Some(aid) = account_id {
+            if self.get_account(aid).is_none() {
+                return Err(CoreError::account_not_found());
+            }
+        }
+        let repo = self
+            .config
+            .repositories
+            .iter_mut()
+            .find(|r| r.id == repo_id)
+            .ok_or_else(CoreError::repository_not_found)?;
+        if let Some(binding) = repo.remote_accounts.iter_mut().find(|b| b.remote == remote) {
+            binding.account_id = account_id;
+        } else {
+            repo.remote_accounts.push(RemoteAccount {
+                remote: remote.to_string(),
+                account_id,
+            });
+        }
         let cloned = repo.clone();
         self.save()?;
         Ok(cloned)
@@ -394,6 +467,29 @@ mod tests {
         assert_eq!(store.active_workspace_id(), Some(ws.id));
         store.delete_workspace(ws.id).unwrap();
         assert!(store.list_workspaces().is_empty());
+    }
+
+    #[test]
+    fn rename_workspace_persists_trimmed_name() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut store = ConfigStore::open(&path).unwrap();
+        let ws = store.create_workspace("ScryPOS").unwrap();
+
+        let renamed = store.rename_workspace(ws.id, "  Scry POS  ").unwrap();
+        assert_eq!(renamed.name, "Scry POS");
+
+        let err = store.rename_workspace(ws.id, "   ").unwrap_err();
+        assert_eq!(err.code, crate::error::ErrorCode::Internal);
+        assert_eq!(store.list_workspaces()[0].name, "Scry POS");
+
+        let missing = crate::ids::WorkspaceId::new();
+        let err = store.rename_workspace(missing, "Other").unwrap_err();
+        assert_eq!(err.code, crate::error::ErrorCode::WorkspaceNotFound);
+
+        drop(store);
+        let reloaded = ConfigStore::open(&path).unwrap();
+        assert_eq!(reloaded.list_workspaces()[0].name, "Scry POS");
     }
 
     #[test]
@@ -492,6 +588,78 @@ mod tests {
         store.delete_account(account.id).unwrap();
         assert!(store.list_accounts().is_empty());
         assert_eq!(store.get_repository(repo.id).unwrap().account_id, None);
+    }
+
+    #[test]
+    fn remote_account_binding_persists_and_overrides_repo_account() {
+        use crate::error::ErrorCode;
+        use crate::models::{AuthKind, HostingProvider};
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir(&repo_dir).unwrap();
+        init_git_repo(&repo_dir);
+
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.create_workspace("ScryPOS").unwrap();
+        let repo = store.add_repository_to_active(&repo_dir).unwrap();
+        let origin = Account {
+            id: AccountId::new(),
+            provider: HostingProvider::GitHub,
+            auth_kind: AuthKind::HttpsToken,
+            username: "origin-user".into(),
+            display_name: "Origin".into(),
+            commit_name: None,
+            commit_email: None,
+            ssh_private_key_path: None,
+        };
+        let upstream = Account {
+            id: AccountId::new(),
+            provider: HostingProvider::GitHub,
+            auth_kind: AuthKind::HttpsToken,
+            username: "upstream-user".into(),
+            display_name: "Upstream".into(),
+            commit_name: None,
+            commit_email: None,
+            ssh_private_key_path: None,
+        };
+        let origin = store.add_account(origin).unwrap();
+        let upstream = store.add_account(upstream).unwrap();
+        store
+            .set_repository_account(repo.id, Some(origin.id))
+            .unwrap();
+        store
+            .set_remote_account(repo.id, "upstream", Some(upstream.id))
+            .unwrap();
+        store
+            .set_remote_account(repo.id, "fork", None)
+            .unwrap();
+
+        let saved = store.get_repository(repo.id).unwrap();
+        assert_eq!(saved.account_for_remote("origin"), Some(origin.id));
+        assert_eq!(saved.account_for_remote("upstream"), Some(upstream.id));
+        assert_eq!(saved.account_for_remote("fork"), None);
+
+        let missing = AccountId::new();
+        let err = store
+            .set_remote_account(repo.id, "origin", Some(missing))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::AccountNotFound);
+        let err = store.set_remote_account(repo.id, "  ", Some(origin.id)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Internal);
+
+        store.delete_account(upstream.id).unwrap();
+        let saved = store.get_repository(repo.id).unwrap();
+        assert_eq!(saved.account_for_remote("upstream"), None);
+        assert_eq!(saved.account_for_remote("origin"), Some(origin.id));
+
+        drop(store);
+        let reloaded = ConfigStore::open(&path).unwrap();
+        let saved = reloaded.get_repository(repo.id).unwrap();
+        assert_eq!(saved.account_for_remote("upstream"), None);
+        assert_eq!(saved.account_for_remote("fork"), None);
+        assert_eq!(saved.account_for_remote("origin"), Some(origin.id));
     }
 
     #[test]

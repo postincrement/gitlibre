@@ -9,7 +9,8 @@ use gitlibre_core::{
     detect_repo_account_from_remote, discard_paths, inspect_repository,
     list_local_branches_for_remote, push_current_branch, remove_paths, resolve_repo_path,
     stage_paths, stop_tracking_paths, unstage_paths, Account, AccountId, AuthKind, BranchInfo,
-    ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth, RepositoryId, WorkspaceId,
+    ChangeArea, CommitIdentity, CommitOptions, CoreError, GitAuth, RemoteAccount, RemoteAuthSet,
+    RepositoryId, WorkspaceId,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
@@ -114,26 +115,62 @@ fn resolve_commit_identity_for_repo(
     }))
 }
 
-fn resolve_auth_for_repo(state: &AppState, repo_id: RepositoryId) -> CmdResult<Option<GitAuth>> {
+fn resolve_remote_auth(state: &AppState, repo_id: RepositoryId) -> CmdResult<RemoteAuthSet> {
     let store = lock_store(state)?;
     let repo = store
         .get_repository(repo_id)
-        .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?;
-    let Some(account_id) = repo.account_id else {
-        return Ok(None);
-    };
-    let account = store
-        .get_account(account_id)
-        .ok_or_else(|| AppErrorDto::from(CoreError::account_not_found()))?
+        .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
         .clone();
+
+    let mut needed = Vec::new();
+    if let Some(id) = repo.account_id {
+        needed.push(id);
+    }
+    for binding in &repo.remote_accounts {
+        if let Some(id) = binding.account_id {
+            if !needed.contains(&id) {
+                needed.push(id);
+            }
+        }
+    }
+
+    let mut accounts = Vec::with_capacity(needed.len());
+    for id in &needed {
+        let account = store
+            .get_account(*id)
+            .ok_or_else(|| AppErrorDto::from(CoreError::account_not_found()))?
+            .clone();
+        accounts.push(account);
+    }
     drop(store);
 
-    let token = if matches!(account.auth_kind, AuthKind::HttpsToken) {
-        state.secrets.get_token(account.id).map_err(AppErrorDto::from)?
-    } else {
-        None
-    };
-    Ok(GitAuth::from_account(&account, token))
+    let mut resolved = Vec::with_capacity(accounts.len());
+    for account in &accounts {
+        let token = if matches!(account.auth_kind, AuthKind::HttpsToken) {
+            state
+                .secrets
+                .get_token(account.id)
+                .map_err(AppErrorDto::from)?
+        } else {
+            None
+        };
+        resolved.push((account.id, GitAuth::from_account(account, token)));
+    }
+
+    fn auth_for(resolved: &[(AccountId, Option<GitAuth>)], id: AccountId) -> Option<GitAuth> {
+        resolved
+            .iter()
+            .find(|(account_id, _)| *account_id == id)
+            .and_then(|(_, auth)| auth.clone())
+    }
+    let mut set = RemoteAuthSet::new(repo.account_id.and_then(|id| auth_for(&resolved, id)));
+    for binding in repo.remote_accounts {
+        set.set_explicit(
+            binding.remote,
+            binding.account_id.and_then(|id| auth_for(&resolved, id)),
+        );
+    }
+    Ok(set)
 }
 
 #[tauri::command]
@@ -146,6 +183,20 @@ pub fn create_workspace(name: String, state: State<'_, AppState>) -> CmdResult<W
     let mut store = lock_store(&state)?;
     let ws = store.create_workspace(name.trim()).map_err(AppErrorDto::from)?;
     Ok(ws.into())
+}
+
+#[tauri::command]
+pub fn rename_workspace(
+    id: WorkspaceId,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<AppSnapshot> {
+    let mut store = lock_store(&state)?;
+    store
+        .rename_workspace(id, name)
+        .map_err(AppErrorDto::from)?;
+    drop(store);
+    snapshot_from_state(&state)
 }
 
 #[tauri::command]
@@ -421,6 +472,20 @@ pub fn set_repository_account(
     let mut store = lock_store(&state)?;
     let repo = store
         .set_repository_account(repository_id, account_id)
+        .map_err(AppErrorDto::from)?;
+    Ok(repo.into())
+}
+
+#[tauri::command]
+pub fn set_remote_account(
+    repository_id: RepositoryId,
+    remote: String,
+    account_id: Option<AccountId>,
+    state: State<'_, AppState>,
+) -> CmdResult<RepositoryDto> {
+    let mut store = lock_store(&state)?;
+    let repo = store
+        .set_remote_account(repository_id, remote, account_id)
         .map_err(AppErrorDto::from)?;
     Ok(repo.into())
 }
@@ -1092,13 +1157,14 @@ pub async fn push_repository(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let path = repo_path(&state, id)?;
-    let auth = resolve_auth_for_repo(&state, id)?;
+    let auth = resolve_remote_auth(&state, id)?;
     state
         .coordinator
         .with_repo_lock(&path, || {
             let path = path.clone();
+            let auth = auth.clone();
             async move {
-                push_current_branch(&path, auth.as_ref())
+                push_current_branch(&path, auth)
                     .await
                     .map_err(AppErrorDto::from)
             }
@@ -1111,15 +1177,28 @@ pub async fn get_repository_status(
     id: RepositoryId,
     state: State<'_, AppState>,
 ) -> CmdResult<RepoStatusDto> {
-    let (display_name, path, account_id) = {
+    let (display_name, path, account_id, remote_accounts) = {
         let store = lock_store(&state)?;
         let repo = store
             .get_repository(id)
             .ok_or_else(|| AppErrorDto::from(CoreError::repository_not_found()))?
             .clone();
-        (repo.display_name, repo.path, repo.account_id)
+        (
+            repo.display_name,
+            repo.path,
+            repo.account_id,
+            repo.remote_accounts,
+        )
     };
-    status_for_repo(&state, id, display_name, path, account_id).await
+    status_for_repo(
+        &state,
+        id,
+        display_name,
+        path,
+        account_id,
+        remote_accounts,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1145,6 +1224,7 @@ pub async fn list_workspace_statuses(
                 repo.display_name,
                 repo.path,
                 repo.account_id,
+                repo.remote_accounts,
             )
             .await?,
         );
@@ -1158,6 +1238,7 @@ async fn status_for_repo(
     display_name: String,
     path: PathBuf,
     account_id: Option<AccountId>,
+    remote_accounts: Vec<RemoteAccount>,
 ) -> CmdResult<RepoStatusDto> {
     let live = {
         let map = lock_live(state)?;
@@ -1178,6 +1259,7 @@ async fn status_for_repo(
             last_error: Some("Repository path no longer exists".into()),
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            remote_accounts,
             commit_name: None,
             commit_email: None,
             commit_identity_is_local: false,
@@ -1198,6 +1280,7 @@ async fn status_for_repo(
             last_error: live.last_error,
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            remote_accounts,
             commit_name: info.commit_name,
             commit_email: info.commit_email,
             commit_identity_is_local: info.commit_identity_is_local,
@@ -1215,6 +1298,7 @@ async fn status_for_repo(
             last_error: Some(err.message),
             last_fetch_summary: live.last_fetch_summary,
             account_id,
+            remote_accounts,
             commit_name: None,
             commit_email: None,
             commit_identity_is_local: false,
@@ -1236,7 +1320,7 @@ pub async fn fetch_repository(
             .path
             .clone()
     };
-    let auth = resolve_auth_for_repo(&state, id)?;
+    let auth = resolve_remote_auth(&state, id)?;
 
     {
         let mut live = lock_live(&state)?;
@@ -1294,7 +1378,7 @@ pub async fn pull_repository(
             .path
             .clone()
     };
-    let auth = resolve_auth_for_repo(&state, id)?;
+    let auth = resolve_remote_auth(&state, id)?;
 
     {
         let mut live = lock_live(&state)?;
@@ -1363,7 +1447,7 @@ pub async fn fetch_workspace(
 
     let mut with_auth = Vec::with_capacity(repos.len());
     for (id, path) in repos {
-        let auth = resolve_auth_for_repo(&state, id)?;
+        let auth = resolve_remote_auth(&state, id)?;
         with_auth.push((id, path, auth));
     }
 
